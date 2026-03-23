@@ -177,6 +177,7 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
                 ::registry::Info {
                     name: #name_s,
                     info_type: ::registry::InfoType::#ityp,
+                    params: #name::params,
                 }
             }
 
@@ -193,10 +194,10 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
                 })
             }
 
-            fn from_args(v: Map<String, Value>) -> Option<Self> {
+            fn from_args(v: Map<String, Value>) -> Result<Self, String> {
                 match serde_json::from_value(Value::Object(v)) {
-                    Ok(a) => Some(a),
-                    _ => None,
+                    Ok(a) => Ok(a),
+                    Err(e) => Err(format!("{}", e)),
                 }
             }
         }
@@ -205,10 +206,7 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
             ::registry::Info {
                 name: #name_s,
                 info_type: ::registry::InfoType::#ityp,
-                /*params: {
-                    static FIELDS: [&'static str; #ps] = [#(#params),*];
-                    &FIELDS
-                },*/
+                params: #name::params,
             }
         }
     };

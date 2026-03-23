@@ -16,6 +16,7 @@ pub enum InfoType {
 pub struct Info {
     pub name: &'static str,
     pub info_type: InfoType,
+    pub params: fn() -> Value,
 }
 
 inventory::collect!(Info);
@@ -86,14 +87,14 @@ pub fn registry() -> &'static Registry {
 pub trait MCPTool {
     fn info() -> Info;
     fn params() -> Value;
-    fn from_args(v: serde_json::Map<String, Value>) -> Option<Self>
+    fn from_args(v: serde_json::Map<String, Value>) -> Result<Self, String>
     where
         Self: Sized;
 }
 pub trait MCPResource {
     fn info() -> Info;
     fn params() -> Value;
-    fn from_args(v: serde_json::Map<String, Value>) -> Option<Self>
+    fn from_args(v: serde_json::Map<String, Value>) -> Result<Self, String>
     where
         Self: Sized;
 }
