@@ -8,12 +8,12 @@ there are a few modes this library was intended to be used in:
 - see no evil, hear, and speak mode
 - i need a lot of edge case management
 
-## speak mode
+## ez mode
 
 this mode is for mostly fully managed users who just want to bootstrap an MCP server and don't really need a lot of edge case management. you can likely
 implement everything you need to do in this mode. see below in this readme for a further discussion as to why you'd want to go to a less managed level.
 
-### speak mode tooling
+### ez mode tools
 
 ```rust
 use mcpr::macros::MCPTool;
@@ -49,7 +49,7 @@ pub async mcp(body: Json<Value>) -> Json<Value> {
 }
 ```
 
-### speak mode resources
+### ez mode resources
 
 ```rust
 use mcpr::macros::MCPTool;
