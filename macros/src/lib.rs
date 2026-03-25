@@ -7,11 +7,6 @@ use syn::{
 
 use convert_case::ccase;
 
-struct MCPMeta {
-    title: Option<String>,
-    description: Option<String>,
-}
-
 fn classify_inner(ty: &syn::Type, is_array: bool, is_optional: bool) -> (&'static str, bool, bool) {
     if let syn::Type::Path(type_path) = ty {
         let last = type_path.path.segments.last().unwrap();
@@ -79,9 +74,12 @@ fn type_to_json(name: &String, f: &Field) -> proc_macro2::TokenStream {
     }
 }
 
-fn parse_register_meta(ast: &DeriveInput) -> MCPMeta {
+fn parse_register_meta(ast: &DeriveInput) -> registry::MCPMeta {
     let mut title = None;
     let mut description = None;
+    let mut icons = None;
+    let mut uri = None;
+    let mut mime_type = None;
 
     for attr in &ast.attrs {
         if !attr.path().is_ident("meta") {
@@ -105,6 +103,20 @@ fn parse_register_meta(ast: &DeriveInput) -> MCPMeta {
                             title = Some(s.value());
                         } else if nv.path.is_ident("description") {
                             description = Some(s.value());
+                        } else if nv.path.is_ident("icons") {
+                            match serde_json::from_str::<Vec<registry::MCPMetaIcon>>(&s.value()) {
+                                Ok(a) => icons = Some(a),
+                                Err(e) => {
+                                    eprintln!(
+                                        "WARNING: failed to parse icons for {}\n{}",
+                                        &ast.ident, e
+                                    )
+                                }
+                            }
+                        } else if nv.path.is_ident("uri") {
+                            uri = Some(s.value());
+                        } else if nv.path.is_ident("mime_type") {
+                            mime_type = Some(s.value());
                         }
                     }
                 }
@@ -113,7 +125,13 @@ fn parse_register_meta(ast: &DeriveInput) -> MCPMeta {
         }
     }
 
-    MCPMeta { title, description }
+    registry::MCPMeta {
+        title,
+        description,
+        uri,
+        mime_type,
+        icons,
+    }
 }
 
 fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> TokenStream {
@@ -147,8 +165,8 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
     let snek = ccase!(snake, name_s.clone());
     let xn = format_ident!("{}", dstruct);
     let ityp = format_ident!("{}", info_type);
-    let mtitle = meta.title.unwrap_or(name_s.clone());
-    let mdescription = meta.description.unwrap_or(name_s.clone());
+    let mtitle = meta.title.clone().unwrap_or(name_s.clone());
+    let mdescription = meta.description.clone().unwrap_or(name_s.clone());
     let required: Vec<String> = params
         .iter()
         .filter_map(|(x, fld)| {
@@ -171,47 +189,119 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
         .map(|(nm, f)| type_to_json(&nm, &(*f).clone()))
         .collect();
 
-    let expanded = quote! {
-        impl registry::#xn for #name {
-            fn info() -> ::registry::Info {
-                ::registry::Info {
-                    name: #name_s,
-                    info_type: ::registry::InfoType::#ityp,
-                    params: #name::params,
+    let from_args_rval = if info_type == "TOOL" {
+        quote! { Ok(Box::new(a)) }
+    } else {
+        quote! { Err(Box::new(a)) }
+    };
+
+    let meta_title = if let Some(t) = meta.title.clone() {
+        quote! { Some(#t.to_string()) }
+    } else {
+        quote! { None }
+    };
+    let meta_description = if let Some(t) = meta.description.clone() {
+        quote! { Some(#t.to_string()) }
+    } else {
+        quote! { None }
+    };
+    let meta_uri = if let Some(t) = meta.uri {
+        quote! { Some(#t.to_string()) }
+    } else {
+        quote! { None }
+    };
+    let meta_mime_type = if let Some(t) = meta.mime_type {
+        quote! { Some(#t.to_string()) }
+    } else {
+        quote! { None }
+    };
+    let meta_icons = if let Some(t) = meta.icons {
+        let j = match proc_macro2::TokenStream::from_str(
+            match serde_json::to_string(&t) {
+                Ok(a) => {
+                    format!("serde_json::json!({})", a)
+                }
+                Err(e) => {
+                    return syn::Error::new_spanned(
+                        &ast.ident,
+                        format!("{} failed to serialize the \"icons\" meta: {}", dstruct, e),
+                    )
+                    .to_compile_error()
+                    .into();
                 }
             }
+            .as_str(),
+        ) {
+            Ok(t) => t,
+            Err(_e) => {
+                return syn::Error::new_spanned(
+                    &ast.ident,
+                    format!("{} failed to tokenize the \"icons\" meta", dstruct),
+                )
+                .to_compile_error()
+                .into();
+            }
+        };
+        quote! { Some(#j) }
+    } else {
+        quote! { None }
+    };
 
+    let executor_class = format_ident!(
+        "MCP{}Executor",
+        if info_type == "TOOL" {
+            "Tool"
+        } else {
+            "Resource"
+        }
+    );
+
+    let expanded = quote! {
+        impl registry::#xn for #name {
             fn params() -> Value {
                 json!({
-    "name": #snek,
-    "title": #mtitle,
-    "description": #mdescription,
-    "inputSchema": {
-        "type": "object",
-        "properties": {#(#prop_toks),*},
-        "required": [#(#required),*] //...
-    },
+                    "name": #snek,
+                    "title": #mtitle,
+                    "description": #mdescription,
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {#(#prop_toks),*},
+                        "required": [#(#required),*] //...
+                    },
                 })
             }
 
-            fn from_args(v: Map<String, Value>) -> Result<Self, String> {
-                match serde_json::from_value(Value::Object(v)) {
-                    Ok(a) => Ok(a),
-                    Err(e) => Err(format!("{}", e)),
+            fn meta() -> registry::MCPMeta {
+                registry::MCPMeta {
+                    title: #meta_title,
+                    description: #meta_description,
+                    uri: #meta_uri,
+                    mime_type: #meta_mime_type,
+                    icons: #meta_icons,
                 }
             }
+
+            fn from_args(v: &serde_json::Value) -> Result<Result<Box<dyn MCPTool>, Box<dyn MCPResource>>, String> {
+                match serde_json::from_value::<Self>(v.clone()) {
+                    Ok(a) => Ok(#from_args_rval),
+                    Err(e) => {println!("ERROR from_args: {}", e); Err(format!("{}", e)) },
+                }
+            }
+
+            fn get_executor(&self) -> Box<&dyn #executor_class> { Box::new(self) }
         }
 
         ::registry::_i::submit! {
             ::registry::Info {
-                name: #name_s,
+                name: #snek,
                 info_type: ::registry::InfoType::#ityp,
                 params: #name::params,
+                from_args: #name::from_args,
+                meta: #name::meta,
             }
         }
     };
-
-    println!("{}", expanded.to_string());
+    //println!("{}", expanded.to_string());
 
     expanded.into()
 }

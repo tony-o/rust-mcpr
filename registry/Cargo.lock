@@ -48,6 +48,7 @@ dependencies = [
  "inventory",
  "serde",
  "serde_json",
+ "udsn",
 ]
 
 [[package]]
@@ -109,6 +110,12 @@ dependencies = [
  "quote",
  "unicode-ident",
 ]
+
+[[package]]
+name = "udsn"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7d52a6ebc623b6b42ddd5cb3c6ce5db2444bf18a8532c98339340f164e06340"
 
 [[package]]
 name = "unicode-ident"

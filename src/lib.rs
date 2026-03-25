@@ -4,10 +4,12 @@ pub mod router;
 
 #[cfg(test)]
 mod tests {
-    use super::MCPTool;
-    use registry::MCPTool;
+    use macros::{MCPResource, MCPTool};
+    use registry::{
+        MCPExecutionResult, MCPResource, MCPResourceExecutor, MCPTool, MCPToolExecutor,
+    };
     use serde::{Deserialize, Serialize};
-    use serde_json::{Map, Value, json};
+    use serde_json::{Value, json};
 
     #[derive(MCPTool, Deserialize, Serialize)]
     #[meta(title = "ABCCamel struct", description = "abc camel description")]
@@ -18,9 +20,49 @@ mod tests {
         ooarr: Option<Vec<i32>>,
     }
 
+    impl MCPToolExecutor for ABCCamel {
+        fn execute(&self) -> Vec<MCPExecutionResult> {
+            vec![MCPExecutionResult::TEXT(format!(
+                "test={},oooptional={},arr={:?},ooarr={:?}",
+                self.test,
+                self.oooptional.unwrap_or(-1),
+                self.arr,
+                self.ooarr.clone().unwrap_or(vec![])
+            ))]
+        }
+    }
+
+    #[derive(MCPResource, Deserialize, Serialize)]
+    #[meta(
+        title = "TestResource",
+        description = "a test resource",
+        uri = "git://some-repo"
+    )]
+    struct TestResource {
+        dsn: udsn::DSN,
+    }
+
+    impl MCPResourceExecutor for TestResource {
+        fn execute(&self) -> Vec<MCPExecutionResult> {
+            vec![
+                MCPExecutionResult::TEXT(self.dsn.to_string()),
+                MCPExecutionResult::TEXT(self.dsn.to_string().chars().rev().collect()),
+            ]
+        }
+
+        fn serves(&self, dsn: &udsn::DSN) -> bool {
+            true
+        }
+    }
+
     #[test]
     fn basic_registry_tool_test() {
-        assert_eq!(super::registry::registry().tools().unwrap().len(), 1);
-        assert!(super::registry::registry().resources().is_none());
+        assert!(super::registry::registry().tools().len() == 1);
+        assert!(super::registry::registry().resources().len() == 1);
+        assert!(
+            super::registry::registry()
+                .get_resource("git://some-repo".to_string())
+                .is_some()
+        );
     }
 }

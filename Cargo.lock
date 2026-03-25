@@ -13,6 +13,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "convert_case"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -44,6 +50,8 @@ dependencies = [
  "inventory",
  "proc-macro2",
  "quote",
+ "registry",
+ "serde_json",
  "syn",
 ]
 
@@ -52,10 +60,12 @@ name = "mcpr"
 version = "0.1.0"
 dependencies = [
  "assert-json-diff",
+ "base64",
  "macros",
  "registry",
  "serde",
  "serde_json",
+ "udsn",
 ]
 
 [[package]]
@@ -89,6 +99,7 @@ dependencies = [
  "inventory",
  "serde",
  "serde_json",
+ "udsn",
 ]
 
 [[package]]
@@ -149,6 +160,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "udsn"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b42a728deb5fe228a4f0dd93cb2dc39745db34f7e64ae8a440951ebb28091896"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
