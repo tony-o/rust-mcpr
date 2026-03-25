@@ -4,8 +4,8 @@ this library is for people who don't want to be experts in MCP dances, and inspi
 
 there are a few modes this library was intended to be used in:
 
-- see no evil, hear no evil, speak mode
-- see no evil, hear, and speak mode
+- see no evil, hear no evil, speak (see: ez mode below)
+- see no evil, hear, and speak mode (see: medium difficulty below)
 - i need a lot of edge case management
 
 ## ez mode
