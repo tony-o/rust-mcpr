@@ -85,6 +85,15 @@ impl Router {
         serde_json::json!({"result": result})
     }
 
+    pub fn exec_from_value(v: serde_json::Value) -> serde_json::Value {
+        match serde_json::from_value::<Request>(v) {
+            Ok(a) => Router::exec(a),
+            Err(_) => {
+                serde_json::json!({"error": { "code": -32601, "message": "invalid request format, expected {jsonrpc:string, id:number|string, method:string, params:optional<object>}"}})
+            }
+        }
+    }
+
     pub fn exec(req: Request) -> serde_json::Value {
         if req.method == "initialize" {
             let mut capabilities = serde_json::Map::new();
