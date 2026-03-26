@@ -295,7 +295,7 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
                 }
             }
 
-            fn get_executor(&self) -> Box<&dyn #executor_class> { Box::new(self) }
+            fn get_executor(&self) -> &dyn #executor_class { self }
 
         }
 

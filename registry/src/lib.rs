@@ -94,7 +94,7 @@ pub fn registry() -> &'static Registry {
 }
 
 pub trait MCPTool {
-    fn get_executor(&self) -> Box<&dyn MCPToolExecutor>;
+    fn get_executor(&self) -> &dyn MCPToolExecutor;
     fn meta() -> MCPMeta
     where
         Self: Sized;
@@ -106,7 +106,7 @@ pub trait MCPTool {
         Self: Sized;
 }
 pub trait MCPResource {
-    fn get_executor(&self) -> Box<&dyn MCPResourceExecutor>;
+    fn get_executor(&self) -> &dyn MCPResourceExecutor;
     fn meta() -> MCPMeta
     where
         Self: Sized;
