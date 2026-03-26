@@ -15,26 +15,26 @@ fn classify_inner(ty: &syn::Type, is_array: bool, is_optional: bool) -> (&'stati
         match ident.as_str() {
             // Unwrap Option — mark optional, recurse
             "Option" => {
-                if let syn::PathArguments::AngleBracketed(args) = &last.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                        return classify_inner(inner, is_array, true);
-                    }
+                if let syn::PathArguments::AngleBracketed(args) = &last.arguments
+                    && let Some(syn::GenericArgument::Type(inner)) = args.args.first()
+                {
+                    return classify_inner(inner, is_array, true);
                 }
             }
             // Unwrap Vec/HashSet — mark array, recurse into item type
             "Vec" | "HashSet" | "BTreeSet" => {
-                if let syn::PathArguments::AngleBracketed(args) = &last.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                        return classify_inner(inner, true, is_optional);
-                    }
+                if let syn::PathArguments::AngleBracketed(args) = &last.arguments
+                    && let Some(syn::GenericArgument::Type(inner)) = args.args.first()
+                {
+                    return classify_inner(inner, true, is_optional);
                 }
             }
             // Unwrap Box/Arc/Rc — transparent, recurse
             "Box" | "Arc" | "Rc" => {
-                if let syn::PathArguments::AngleBracketed(args) = &last.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                        return classify_inner(inner, is_array, is_optional);
-                    }
+                if let syn::PathArguments::AngleBracketed(args) = &last.arguments
+                    && let Some(syn::GenericArgument::Type(inner)) = args.args.first()
+                {
+                    return classify_inner(inner, is_array, is_optional);
                 }
             }
             // HashMap/BTreeMap — always an object
@@ -78,8 +78,9 @@ fn parse_register_meta(ast: &DeriveInput) -> registry::MCPMeta {
     let mut title = None;
     let mut description = None;
     let mut icons = None;
-    let mut uri = None;
+    let mut uri = "unset:///".to_string();
     let mut mime_type = None;
+    let mut name = ast.ident.to_string();
 
     for attr in &ast.attrs {
         if !attr.path().is_ident("meta") {
@@ -92,41 +93,37 @@ fn parse_register_meta(ast: &DeriveInput) -> registry::MCPMeta {
             .unwrap_or_default();
 
         for meta in nested {
-            match meta {
-                Meta::NameValue(nv) => {
-                    if let syn::Expr::Lit(syn::ExprLit {
-                        lit: syn::Lit::Str(s),
-                        ..
-                    }) = &nv.value
-                    {
-                        if nv.path.is_ident("title") {
-                            title = Some(s.value());
-                        } else if nv.path.is_ident("description") {
-                            description = Some(s.value());
-                        } else if nv.path.is_ident("icons") {
-                            match serde_json::from_str::<Vec<registry::MCPMetaIcon>>(&s.value()) {
-                                Ok(a) => icons = Some(a),
-                                Err(e) => {
-                                    eprintln!(
-                                        "WARNING: failed to parse icons for {}\n{}",
-                                        &ast.ident, e
-                                    )
-                                }
-                            }
-                        } else if nv.path.is_ident("uri") {
-                            uri = Some(s.value());
-                        } else if nv.path.is_ident("mime_type") {
-                            mime_type = Some(s.value());
+            if let Meta::NameValue(nv) = meta
+                && let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(s),
+                    ..
+                }) = &nv.value
+            {
+                if nv.path.is_ident("title") {
+                    title = Some(s.value());
+                } else if nv.path.is_ident("description") {
+                    description = Some(s.value());
+                } else if nv.path.is_ident("icons") {
+                    match serde_json::from_str::<Vec<registry::MCPMetaIcon>>(&s.value()) {
+                        Ok(a) => icons = Some(a),
+                        Err(e) => {
+                            eprintln!("WARNING: failed to parse icons for {}\n{}", &ast.ident, e)
                         }
                     }
+                } else if nv.path.is_ident("name") {
+                    name = s.value();
+                } else if nv.path.is_ident("uri") {
+                    uri = s.value();
+                } else if nv.path.is_ident("mime_type") {
+                    mime_type = Some(s.value());
                 }
-                _ => (),
             }
         }
     }
 
     registry::MCPMeta {
         title,
+        name,
         description,
         uri,
         mime_type,
@@ -186,13 +183,13 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
 
     let prop_toks: Vec<proc_macro2::TokenStream> = params
         .iter()
-        .map(|(nm, f)| type_to_json(&nm, &(*f).clone()))
+        .map(|(nm, f)| type_to_json(nm, &(*f).clone()))
         .collect();
 
     let from_args_rval = if info_type == "TOOL" {
-        quote! { Ok(Box::new(a)) }
+        quote! { registry::FromArgResult::Tool(Box::new(a)) }
     } else {
-        quote! { Err(Box::new(a)) }
+        quote! { registry::FromArgResult::Resource(Box::new(a)) }
     };
 
     let meta_title = if let Some(t) = meta.title.clone() {
@@ -205,11 +202,8 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
     } else {
         quote! { None }
     };
-    let meta_uri = if let Some(t) = meta.uri {
-        quote! { Some(#t.to_string()) }
-    } else {
-        quote! { None }
-    };
+    let meta_uri = meta.uri;
+    let meta_name = meta.name;
     let meta_mime_type = if let Some(t) = meta.mime_type {
         quote! { Some(#t.to_string()) }
     } else {
@@ -256,6 +250,18 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
         }
     );
 
+    let resource_extras = if info_type == "TOOL" {
+        quote! {
+            is_template: || false,
+            serves: |_| false,
+        }
+    } else {
+        quote! {
+            is_template: #name::is_template,
+            serves: #name::serves,
+        }
+    };
+
     let expanded = quote! {
         impl registry::#xn for #name {
             fn params() -> Value {
@@ -275,20 +281,22 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
                 registry::MCPMeta {
                     title: #meta_title,
                     description: #meta_description,
-                    uri: #meta_uri,
+                    uri: #meta_uri.to_string(),
                     mime_type: #meta_mime_type,
                     icons: #meta_icons,
+                    name: #meta_name.to_string(),
                 }
             }
 
-            fn from_args(v: &serde_json::Value) -> Result<Result<Box<dyn MCPTool>, Box<dyn MCPResource>>, String> {
+            fn from_args(v: &serde_json::Value) -> registry::FromArgResult {
                 match serde_json::from_value::<Self>(v.clone()) {
-                    Ok(a) => Ok(#from_args_rval),
-                    Err(e) => {println!("ERROR from_args: {}", e); Err(format!("{}", e)) },
+                    Ok(a) => #from_args_rval,
+                    Err(e) => registry::FromArgResult::Error(format!("{}", e)),
                 }
             }
 
             fn get_executor(&self) -> Box<&dyn #executor_class> { Box::new(self) }
+
         }
 
         ::registry::_i::submit! {
@@ -298,6 +306,7 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
                 params: #name::params,
                 from_args: #name::from_args,
                 meta: #name::meta,
+                #resource_extras
             }
         }
     };

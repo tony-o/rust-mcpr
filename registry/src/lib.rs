@@ -12,14 +12,21 @@ pub enum InfoType {
     RESOURCE,
 }
 
+pub enum FromArgResult {
+    Tool(Box<dyn MCPTool>),
+    Resource(Box<dyn MCPResource>),
+    Error(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct Info {
     pub name: &'static str,
     pub info_type: InfoType,
     pub params: fn() -> Value,
     pub meta: fn() -> MCPMeta,
-    pub from_args:
-        fn(&serde_json::Value) -> Result<Result<Box<dyn MCPTool>, Box<dyn MCPResource>>, String>,
+    pub from_args: fn(&serde_json::Value) -> FromArgResult,
+    pub is_template: fn() -> bool,
+    pub serves: fn(&udsn::DSN) -> bool,
 }
 
 inventory::collect!(Info);
@@ -38,18 +45,10 @@ impl Registry {
             if i.info_type == InfoType::TOOL {
                 tools.insert(i.name.to_string(), i);
             } else {
-                resources.insert(
-                    (i.meta)()
-                        .uri
-                        .unwrap_or_else(|| {
-                            panic!("{} must have a URI defined, please see the docs", i.name)
-                        })
-                        .to_string(),
-                    i,
-                );
+                resources.insert((i.meta)().uri.to_string(), i);
             }
         }
-        Registry::new_from(tools.clone(), resources.clone())
+        Registry::new_from(tools, resources)
     }
 
     fn new_from(
@@ -57,59 +56,28 @@ impl Registry {
         resources: HashMap<String, &'static Info>,
     ) -> Self {
         Self {
-            tools: tools.clone(),
-            resources: resources.clone(),
+            tools,
+            resources,
             resource_instances: HashMap::new(),
         }
     }
 
-    pub fn get_tool(&self, name: String) -> Option<&Info> {
-        Some(self.tools.clone().get(&name)?)
+    pub fn get_tool(&self, name: &str) -> Option<&Info> {
+        Some(self.tools.get(name)?)
     }
 
-    pub fn get_resource(&self, name: String) -> Option<&Info> {
-        Some(self.resources.clone().get(&name)?)
+    pub fn get_resource(&self, name: &str) -> Option<&Info> {
+        Some(self.resources.get(name)?)
     }
 
-    pub fn tools(&self) -> HashMap<String, &Info> {
-        self.tools.clone()
+    pub fn tools(&self) -> &HashMap<String, &Info> {
+        &self.tools
     }
 
-    pub fn resources(&self) -> HashMap<String, &Info> {
-        self.resources.clone()
+    pub fn resources(&self) -> &HashMap<String, &Info> {
+        &self.resources
     }
 
-    /*
-      "resources": [
-        {
-          "uri": "git://github.com/org/repo",
-          "name": "repo",
-          "title": "My Repository",
-          "description": "Source code for the main application",
-          "mimeType": "text/plain"
-        },
-        {
-          "uri": "file:///etc/config/app.yaml",
-          "name": "app-config",
-          "title": "Application Config",
-          "description": "Main application configuration file",
-          "mimeType": "application/yaml"
-        },
-        {
-          "uri": "https://api.example.com/data/users",
-          "name": "users",
-          "title": "Users API",
-          "description": "REST endpoint returning user records",
-          "mimeType": "application/json"
-        },
-        {
-          "uri": "catalog://entity-types",
-          "name": "entity-types",
-          "title": "Entity Types",
-          "description": "All entity types defined in the catalog",
-          "mimeType": "application/json"
-        }
-    */
     pub fn register_resource_adapter(
         &mut self,
         name: String,
@@ -133,9 +101,7 @@ pub trait MCPTool {
     fn params() -> Value
     where
         Self: Sized;
-    fn from_args(
-        v: &serde_json::Value,
-    ) -> Result<Result<Box<dyn MCPTool>, Box<dyn MCPResource>>, String>
+    fn from_args(v: &serde_json::Value) -> FromArgResult
     where
         Self: Sized;
 }
@@ -147,9 +113,7 @@ pub trait MCPResource {
     fn params() -> Value
     where
         Self: Sized;
-    fn from_args(
-        v: &serde_json::Value,
-    ) -> Result<Result<Box<dyn MCPTool>, Box<dyn MCPResource>>, String>
+    fn from_args(v: &serde_json::Value) -> FromArgResult
     where
         Self: Sized;
 }
@@ -159,22 +123,72 @@ pub struct MCPExecutionResultImage {
     pub data: Vec<u8>,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MCPExecutionResultAudioAnnotations {
     pub audience: Vec<String>,
     pub priority: f32,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MCPExecutionResultAudio {
     pub mime_type: String,
     pub data: Vec<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<MCPExecutionResultAudioAnnotations>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MCPResourceIcons {
+    pub src: String,
+    pub mime_type: String,
+    pub sizes: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MCPResourceResult {
+    pub uri: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icons: Option<Vec<MCPResourceIcons>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blob: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+impl MCPResourceResult {
+    pub fn builder(uri: String, name: String) -> Self {
+        Self {
+            uri,
+            name,
+            title: None,
+            description: None,
+            icons: None,
+            mime_type: None,
+            size: None,
+            blob: None,
+            text: None,
+        }
+    }
 }
 
 pub enum MCPExecutionResult {
     TEXT(String),
     IMAGE(MCPExecutionResultImage),
     AUDIO(MCPExecutionResultAudio),
-    RESOURCE(String),
+    RESOURCE(MCPResourceResult),
     RAW(serde_json::Value),
     ERROR((String, Option<Value>)),
 }
@@ -183,10 +197,15 @@ pub trait MCPToolExecutor {
     fn execute(&self) -> Vec<MCPExecutionResult>;
 }
 pub trait MCPResourceExecutor {
-    fn execute(&self) -> Vec<MCPExecutionResult>;
-    fn serves(&self, dsn: &udsn::DSN) -> bool;
+    fn execute(&self) -> Vec<MCPResourceResult>;
+    fn serves(dsn: &udsn::DSN) -> bool
+    where
+        Self: Sized;
+    fn is_template() -> bool
+    where
+        Self: Sized;
 }
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MCPMetaIcon {
     pub src: String,
@@ -197,14 +216,44 @@ pub struct MCPMetaIcon {
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MCPMeta {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    pub uri: String,
+    pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    pub uri: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icons: Option<Vec<MCPMetaIcon>>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MCPTemplateMeta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub uri_template: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icons: Option<Vec<MCPMetaIcon>>,
+}
+
+impl MCPTemplateMeta {
+    pub fn from_meta(m: &MCPMeta) -> Self {
+        Self {
+            title: m.title.clone(),
+            uri_template: m.uri.clone(),
+            name: m.name.clone(),
+            description: m.description.clone(),
+            mime_type: m.mime_type.clone(),
+            icons: m.icons.clone(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -214,31 +263,51 @@ mod tests {
     #[test]
     fn registry() {
         let r = Registry::new_from(
-            Some(HashMap::from([(
+            HashMap::from([(
                 "t1".to_string(),
                 &Info {
                     name: "abc",
-                    path: "abc",
-                    fields: &["abc1"],
                     info_type: InfoType::TOOL,
+                    from_args: |_| FromArgResult::Error("tool".to_string()),
+                    is_template: || false,
+                    serves: |_| false,
+                    params: || serde_json::Value::String("".to_string()),
+                    meta: || MCPMeta {
+                        title: None,
+                        uri: "".to_string(),
+                        name: "".to_string(),
+                        description: None,
+                        mime_type: None,
+                        icons: None,
+                    },
                 },
-            )])),
-            Some(HashMap::from([(
+            )]),
+            HashMap::from([(
                 "r1".to_string(),
                 &Info {
                     name: "xyz",
-                    path: "xyz",
-                    fields: &["xyz1"],
                     info_type: InfoType::RESOURCE,
+                    from_args: |_| FromArgResult::Error("resource".to_string()),
+                    params: || serde_json::Value::String("".to_string()),
+                    is_template: || false,
+                    serves: |_| false,
+                    meta: || MCPMeta {
+                        title: None,
+                        uri: "".to_string(),
+                        name: "".to_string(),
+                        description: None,
+                        mime_type: None,
+                        icons: None,
+                    },
                 },
-            )])),
+            )]),
         );
 
-        assert_eq!(r.tools().unwrap().len(), 1);
-        assert_eq!(r.get_tool(String::from("t1")).unwrap().name, "abc");
-        assert!(r.get_tool(String::from("r1")).is_none());
-        assert_eq!(r.resources().unwrap().len(), 1);
-        assert_eq!(r.get_resource(String::from("r1")).unwrap().name, "xyz");
-        assert!(r.get_resource(String::from("t1")).is_none());
+        assert_eq!(r.tools().len(), 1);
+        assert_eq!(r.get_tool("t1").unwrap().name, "abc");
+        assert!(r.get_tool("r1").is_none());
+        assert_eq!(r.resources().len(), 1);
+        assert_eq!(r.get_resource("r1").unwrap().name, "xyz");
+        assert!(r.get_resource("t1").is_none());
     }
 }

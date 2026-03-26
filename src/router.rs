@@ -2,8 +2,8 @@ use base64::{Engine as _, engine::general_purpose};
 
 #[derive(serde::Deserialize, serde::Serialize)]
 enum RequestID {
-    STRING(String),
-    NUMBER(i64),
+    Str(String),
+    Number(i64),
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -25,12 +25,6 @@ struct ResourceCall {
     uri: String,
 }
 
-impl Request {
-    pub fn from_str(v: &String) -> Result<Self, String> {
-        serde_json::from_str(v).map_err(|e| format!("{}", e))
-    }
-}
-
 pub struct Router;
 
 impl Router {
@@ -46,14 +40,27 @@ impl Router {
                     "type": "text",
                     "text": s.to_string(),
                 })),
-                registry::MCPExecutionResult::AUDIO(a) => content.push(serde_json::json!({
-                    "type": "audio",
-                    "data": general_purpose::STANDARD.encode(&a.data),
-                    "mimeType": a.mime_type,
-                    "annotations": if let Some(b) = &a.annotations {
-                        serde_json::json!({ "audience": b.audience, "priority": b.priority })
-                    } else { serde_json::Value::Null },
-                })),
+                registry::MCPExecutionResult::AUDIO(a) => {
+                    let mut v = serde_json::Map::new();
+                    v.insert(
+                        "type".to_string(),
+                        serde_json::Value::String("audio".to_string()),
+                    );
+                    v.insert(
+                        "data".to_string(),
+                        serde_json::Value::String(
+                            general_purpose::STANDARD.encode(&a.data).to_string(),
+                        ),
+                    );
+                    v.insert(
+                        "mimeType".to_string(),
+                        serde_json::Value::String(a.mime_type.to_string()),
+                    );
+                    if let Some(b) = &a.annotations {
+                        v.insert("annotations".to_string(), serde_json::to_value(b).unwrap());
+                    }
+                    content.push(serde_json::Value::Object(v));
+                }
                 registry::MCPExecutionResult::IMAGE(a) => content.push(serde_json::json!({
                     "type": "image",
                     "data": general_purpose::STANDARD.encode(&a.data),
@@ -61,22 +68,20 @@ impl Router {
                 })),
                 registry::MCPExecutionResult::RAW(v) => content.push(v.clone()),
                 registry::MCPExecutionResult::RESOURCE(r) => {
-                    // TODO
-                    return serde_json::json!({
-                        "error": {"code": -32603, "message": format!("Server requested resource response for a resource the tool has no knowledge of {}", r)
-                        }
-                    });
+                    content.push(
+                        serde_json::to_value(r)
+                            .unwrap_or_else(|e|
+                                serde_json::json!({"type": "text",
+                                                   "text": format!("error: {:?} serializing result: {}", r, e)
+                                })));
                 }
                 registry::MCPExecutionResult::ERROR((s, _)) => {
-                    if mcper.len() == 0 {
-                        content.push(serde_json::json!({
-                            "error": {"code": -32600, "message": s }
-                        }))
-                    } else {
-                        content.push(
-                            serde_json::json!({"type":"text", "text": format!("error: {}", s)}),
-                        );
+                    content
+                        .push(serde_json::json!({"type":"text", "text": format!("error: {}", s)}));
+                    if content_key == "content" {
                         result.insert("isError".to_string(), serde_json::Value::Bool(true));
+                    } else {
+                        return serde_json::json!({"error": { "code": -32002, "message": s } });
                     }
                 }
             }
@@ -89,55 +94,84 @@ impl Router {
         match serde_json::from_value::<Request>(v) {
             Ok(a) => Router::exec(a),
             Err(_) => {
-                serde_json::json!({"error": { "code": -32601, "message": "invalid request format, expected {jsonrpc:string, id:number|string, method:string, params:optional<object>}"}})
+                serde_json::json!({"jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "invalid request format, expected {jsonrpc:string, id:number|string, method:string, params:optional<object>}"}})
             }
         }
     }
 
     pub fn exec(req: Request) -> serde_json::Value {
+        match Router::execx(&req) {
+            serde_json::Value::Object(mut result_map) => {
+                result_map.insert(
+                    "jsonrpc".to_string(),
+                    serde_json::Value::String(req.jsonrpc),
+                );
+                result_map.insert(
+                    "id".to_string(),
+                    match req.id {
+                        RequestID::Number(a) => serde_json::Value::Number(a.into()),
+                        RequestID::Str(a) => serde_json::Value::String(a),
+                    },
+                );
+                serde_json::Value::Object(result_map)
+            }
+            a => a,
+        }
+    }
+
+    fn execx(req: &Request) -> serde_json::Value {
         if req.method == "initialize" {
             let mut capabilities = serde_json::Map::new();
-            if registry::registry().tools().len() > 0 {
+            if !registry::registry().tools().is_empty() {
                 capabilities.insert(
                     "tools".to_string(),
                     serde_json::Value::Object(serde_json::Map::new()),
                 );
             }
-            if registry::registry().resources().len() > 0 {
+            if !registry::registry().resources().is_empty() {
                 capabilities.insert(
                     "resources".to_string(),
                     serde_json::Value::Object(serde_json::Map::new()),
                 );
             }
             return serde_json::json!({
-                "protocolVersion": "2025-11-25",
-                "capabilities": capabilities,
-                "serverInfo": {
-                    "name": "name",
-                    "title": "title",
-                    "version": "1.0.0",
-                    "description": "an example mcp",
-                },
+                "result": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": capabilities,
+                    "serverInfo": {
+                        "name": "name",
+                        "title": "title",
+                        "version": "1.0.0",
+                        "description": "an example mcp",
+                    },
+                }
             });
         } else if req.method == "tools/list" {
-            return serde_json::json!({"result": { "tools": registry::registry().tools().iter().map(|(_, i)| (i.params)()).collect::<Vec<_>>() } });
+            return serde_json::json!({"result": { "tools": registry::registry().tools().values().map(|i| (i.params)()).collect::<Vec<_>>() } });
         } else if req.method == "tools/call" {
             if let Ok(tool_call) = serde_json::from_value::<ToolCall>(
                 req.params.clone().unwrap_or(serde_json::json!({})),
             ) {
-                if let Some(tool) = registry::registry().get_tool(tool_call.name.clone()) {
-                    if let Ok(Ok(caller)) = (tool.from_args)(
+                if let Some(tool) = registry::registry().get_tool(&tool_call.name) {
+                    match (tool.from_args)(
                         &tool_call.arguments.clone().unwrap_or(serde_json::json!({})),
                     ) {
-                        let executor = caller.get_executor();
-                        return Router::execution_result_to_mcp(
-                            executor.execute(),
-                            "content".to_string(),
-                        );
+                        registry::FromArgResult::Tool(caller) => {
+                            let executor = caller.get_executor();
+                            return Router::execution_result_to_mcp(
+                                executor.execute(),
+                                "content".to_string(),
+                            );
+                        }
+                        registry::FromArgResult::Error(s) => {
+                            return serde_json::json!({"error": {"code": -32602, "message": format!("invalid parameters for tools/call {}", s)}});
+                        }
+                        _ => {
+                            return serde_json::json!({"error": {"code": -32602, "message": format!("invalid parameters for tools/call {}", tool_call.name)}});
+                        }
                     }
-                    return serde_json::json!({"error": {"code": -32602, "message": format!("invalid parameters for tools/call {}", tool_call.name)}});
                 }
-                return serde_json::json!({"error": {"code": -32602, "message": format!("invalid parameters for tools/call, \"name\" is required")}});
+                return serde_json::json!({"error": {"code": -32602, "message": format!("invalid parameters for tools/call, unknown tool: {}", tool_call.name)}});
             }
             return serde_json::json!({"error": { "code": -32602, "message": "malformed request from LLM"}});
         } else if req.method == "resources/list" {
@@ -145,22 +179,43 @@ impl Router {
             let resources: Vec<registry::MCPMeta> = registry::registry()
                 .resources()
                 .iter()
-                .map(|(_, i)| (i.meta)())
+                .filter_map(|(_, i)| {
+                    if !(i.is_template)() {
+                        Some((i.meta)())
+                    } else {
+                        None
+                    }
+                })
                 .collect();
             return serde_json::json!({"result": {"resources": resources }});
+        } else if req.method == "resources/templates/list" {
+            let resources: Vec<registry::MCPTemplateMeta> = registry::registry()
+                .resources()
+                .values()
+                .filter_map(|i| {
+                    if (i.is_template)() {
+                        Some(registry::MCPTemplateMeta::from_meta(&(i.meta)()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            return serde_json::json!({"result": {"resourceTemplates": resources }});
         } else if req.method == "resources/read" {
             if let Ok(resource_call) = serde_json::from_value::<ResourceCall>(
                 req.params.clone().unwrap_or(serde_json::json!({})),
             ) {
-                if let Some(r) =
-                    registry::registry().get_resource(resource_call.clone().uri.clone())
-                {
+                if let Some(r) = registry::registry().get_resource(&resource_call.uri) {
                     // exact match
-                    if let Ok(Err(a)) =
-                        (r.from_args)(&serde_json::json!({ "dsn": resource_call.uri.clone() }))
+                    if let registry::FromArgResult::Resource(a) =
+                        (r.from_args)(&serde_json::json!({ "dsn": &resource_call.uri }))
                     {
                         return Router::execution_result_to_mcp(
-                            a.get_executor().execute(),
+                            a.get_executor()
+                                .execute()
+                                .iter()
+                                .map(|a| registry::MCPExecutionResult::RESOURCE(a.clone()))
+                                .collect(),
                             "contents".to_string(),
                         );
                     } else {
@@ -168,28 +223,33 @@ impl Router {
                     }
                 } else {
                     {
-                        let dsn = match udsn::DSN::parse(resource_call.clone().uri) {
+                        let dsn = match udsn::DSN::parse(resource_call.uri.clone()) {
                             Some(d) => d,
                             _ => {
                                 return serde_json::json!({"error": { "code": -32602, "message": "malformed requested, expected uri in params"}});
                             }
                         };
                         for (_, i) in registry::registry().resources().iter() {
-                            if let Ok(Err(a)) = (i.from_args)(
-                                &serde_json::json!({ "dsn": resource_call.clone().uri }),
-                            ) && a.get_executor().serves(&dsn)
+                            if (i.is_template)()
+                                && (i.serves)(&dsn)
+                                && let registry::FromArgResult::Resource(a) =
+                                    (i.from_args)(&serde_json::json!({ "dsn": &resource_call.uri }))
                             {
                                 return Router::execution_result_to_mcp(
-                                    a.get_executor().execute(),
+                                    a.get_executor()
+                                        .execute()
+                                        .iter()
+                                        .map(|a| registry::MCPExecutionResult::RESOURCE(a.clone()))
+                                        .collect(),
                                     "contents".to_string(),
                                 );
                             }
                         }
                     }
                 };
-                return serde_json::json!({"error": {"code": -32601, "message": "no valid resource handler found for requested uri"}});
+                return serde_json::json!({"error": {"code": -32602, "message": "no valid resource handler found for requested uri"}});
             }
-            return serde_json::json!({"error": { "code": -32602, "message": format!("malformed request from LLM: {}", req.method)}});
+            return serde_json::json!({"error": { "code": -32600, "message": format!("malformed request from LLM: {}", req.method)}});
         }
         // Method not found: -32601 (Capability not supported)
         // Invalid prompt name: -32602 (Invalid params)
@@ -208,7 +268,7 @@ mod tests {
     fn basic_router() {
         let resp = Router::exec(Request {
             jsonrpc: "2.0".to_string(),
-            id: RequestID::NUMBER(123),
+            id: RequestID::Number(123),
             method: "tools/list".to_string(),
             params: json!({
                 "test": 15,
@@ -217,6 +277,8 @@ mod tests {
             .into(),
         });
         let cmp = json!({
+            "jsonrpc": "2.0",
+            "id": 123,
             "result": { "tools": [
                 { "description": "abc camel description",
                   "title": "ABCCamel struct",
@@ -242,7 +304,7 @@ mod tests {
     fn basic_tool_call() {
         let resp = Router::exec(Request {
             jsonrpc: "2.0".to_string(),
-            id: RequestID::NUMBER(42),
+            id: RequestID::Number(42),
             method: "tools/call".to_string(),
             params: json!({
                 "name": "abc_camel",
@@ -254,6 +316,8 @@ mod tests {
             .into(),
         });
         let cmp = json!({
+            "jsonrpc": "2.0",
+            "id": 42,
             "result": {
                 "content": [{"type": "text", "text": "test=15,oooptional=-1,arr=[5],ooarr=[]"}],
             }
@@ -265,7 +329,7 @@ mod tests {
     fn basic_tool_call_err() {
         let resp = Router::exec(Request {
             jsonrpc: "2.0".to_string(),
-            id: RequestID::NUMBER(42),
+            id: RequestID::Str("a666".to_string()),
             method: "tools/call".to_string(),
             params: json!({
                 "name": "abc_camel",
@@ -276,12 +340,13 @@ mod tests {
             .into(),
         });
         let cmp = json!({
+            "jsonrpc": "2.0",
+            "id": "a666",
             "error": {
                 "code": -32602,
-                "message": "invalid parameters for tools/call abc_camel",
+                "message": "invalid parameters for tools/call missing field `test`",
             }
         });
-        println!("{}", resp);
         assert_eq!(cmp, resp);
     }
 
@@ -289,16 +354,19 @@ mod tests {
     fn basic_resource_list() {
         let resp = Router::exec(Request {
             jsonrpc: "2.0".to_string(),
-            id: RequestID::NUMBER(42),
+            id: RequestID::Number(42),
             method: "resources/list".to_string(),
             params: None,
         });
         let cmp = json!({
+            "jsonrpc": "2.0",
+            "id": 42,
             "result": {
                 "resources": [
                     {"title": "TestResource"
                     ,"description": "a test resource"
                     ,"uri": "git://some-repo"
+                    ,"name": "TestResource"
                     }
                 ],
             }
@@ -309,18 +377,20 @@ mod tests {
     fn basic_resource_call() {
         let resp = Router::exec(Request {
             jsonrpc: "2.0".to_string(),
-            id: RequestID::NUMBER(42),
+            id: RequestID::Str("123".to_string()),
             method: "resources/read".to_string(),
             params: Some(json!({ "uri": "git://some-repo" })),
         });
         let cmp = json!({
+            "jsonrpc": "2.0",
+            "id": "123",
             "result": {
                 "contents": [
-                    {"type": "text",
-                     "text": "git://some-repo"
+                    {"uri": "test://forward",
+                     "name": "git://some-repo"
                     },
-                    {"type": "text",
-                     "text": "oper-emos//:tig"
+                    {"uri": "test://reverse",
+                     "name": "oper-emos//:tig"
                     }
                 ],
             }

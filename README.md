@@ -79,8 +79,12 @@ impl MCPToolExecutor for HandSaw {
         vec![MCPExecutionResult::TEXT("see the documentation below for more information about MCPExecutionResult"))]
     }
 
-    fn serves(&self, dsn: &udsn::DSN) -> bool {
+    fn serves(dsn: &udsn::DSN) -> bool {
         dsn.protocol == "git" || dsn.protocol == "file"
+    }
+
+    fn is_template() -> bool {
+        true
     }
 }
 

@@ -6,7 +6,8 @@ pub mod router;
 mod tests {
     use macros::{MCPResource, MCPTool};
     use registry::{
-        MCPExecutionResult, MCPResource, MCPResourceExecutor, MCPTool, MCPToolExecutor,
+        MCPExecutionResult, MCPResource, MCPResourceExecutor, MCPResourceResult, MCPTool,
+        MCPToolExecutor,
     };
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
@@ -43,15 +44,22 @@ mod tests {
     }
 
     impl MCPResourceExecutor for TestResource {
-        fn execute(&self) -> Vec<MCPExecutionResult> {
+        fn execute(&self) -> Vec<MCPResourceResult> {
             vec![
-                MCPExecutionResult::TEXT(self.dsn.to_string()),
-                MCPExecutionResult::TEXT(self.dsn.to_string().chars().rev().collect()),
+                MCPResourceResult::builder("test://forward".to_string(), self.dsn.to_string()),
+                MCPResourceResult::builder(
+                    "test://reverse".to_string(),
+                    self.dsn.to_string().chars().rev().collect(),
+                ),
             ]
         }
 
-        fn serves(&self, dsn: &udsn::DSN) -> bool {
+        fn serves(_dsn: &udsn::DSN) -> bool {
             true
+        }
+
+        fn is_template() -> bool {
+            false
         }
     }
 
@@ -61,7 +69,7 @@ mod tests {
         assert!(super::registry::registry().resources().len() == 1);
         assert!(
             super::registry::registry()
-                .get_resource("git://some-repo".to_string())
+                .get_resource("git://some-repo")
                 .is_some()
         );
     }
