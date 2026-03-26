@@ -14,3 +14,4 @@ inventory = "0.3"
 convert_case = "0.11.0"
 registry = { path = '../registry' }
 serde_json = "1.0.0"
+tracing = "0.1.44"

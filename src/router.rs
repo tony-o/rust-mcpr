@@ -20,17 +20,85 @@ struct ToolCall {
     arguments: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 struct ResourceCall {
     uri: String,
 }
 
-pub struct Router;
+pub type ServerIcon = registry::MCPMetaIcon;
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerInfo {
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    icons: Option<Vec<ServerIcon>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    website_url: Option<String>,
+}
 
-impl Router {
+impl ServerInfo {
+    pub fn new() -> Self {
+        Self {
+            name: "Example MCP Server".to_string(),
+            version: "1.0.0".to_string(),
+            title: None,
+            description: None,
+            icons: None,
+            website_url: None,
+        }
+    }
+
+    pub fn name(&mut self, name: &str) -> &mut Self {
+        self.name = name.to_string();
+        self
+    }
+
+    pub fn description(&mut self, description: &str) -> &mut Self {
+        self.description = Some(description.to_string());
+        self
+    }
+
+    pub fn build(&mut self) -> Self {
+        self.to_owned()
+    }
+}
+
+#[derive(Clone)]
+pub struct Router<'a> {
+    server_info: ServerInfo,
+    registry: &'a registry::Registry,
+}
+
+impl<'a> Router<'a> {
+    pub fn new() -> Self {
+        Router {
+            registry: registry::registry(),
+            server_info: ServerInfo::new(),
+        }
+    }
+
+    pub fn registry(&mut self, registry: &'a registry::Registry) -> &mut Self {
+        self.registry = registry;
+        self
+    }
+
+    pub fn server_info(&mut self, server_info: ServerInfo) -> &mut Self {
+        self.server_info = server_info;
+        self
+    }
+
+    pub fn build(&mut self) -> Self {
+        self.to_owned()
+    }
+
     fn execution_result_to_mcp(
         mcper: Vec<registry::MCPExecutionResult>,
-        content_key: String,
+        content_key: &str,
     ) -> serde_json::Value {
         let mut content: Vec<serde_json::Value> = Vec::new();
         let mut result = serde_json::Map::new();
@@ -86,21 +154,21 @@ impl Router {
                 }
             }
         }
-        result.insert(content_key, serde_json::Value::Array(content));
+        result.insert(content_key.to_string(), serde_json::Value::Array(content));
         serde_json::json!({"result": result})
     }
 
-    pub fn exec_from_value(v: serde_json::Value) -> serde_json::Value {
+    pub fn exec_from_value(&self, v: serde_json::Value) -> serde_json::Value {
         match serde_json::from_value::<Request>(v) {
-            Ok(a) => Router::exec(a),
+            Ok(a) => self.exec(a),
             Err(_) => {
                 serde_json::json!({"jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "invalid request format, expected {jsonrpc:string, id:number|string, method:string, params:optional<object>}"}})
             }
         }
     }
 
-    pub fn exec(req: Request) -> serde_json::Value {
-        match Router::execx(&req) {
+    pub fn exec(&self, req: Request) -> serde_json::Value {
+        match self.execx(&req) {
             serde_json::Value::Object(mut result_map) => {
                 result_map.insert(
                     "jsonrpc".to_string(),
@@ -119,16 +187,16 @@ impl Router {
         }
     }
 
-    fn execx(req: &Request) -> serde_json::Value {
+    fn execx(&self, req: &Request) -> serde_json::Value {
         if req.method == "initialize" {
             let mut capabilities = serde_json::Map::new();
-            if !registry::registry().tools().is_empty() {
+            if !self.registry.tools().is_empty() {
                 capabilities.insert(
                     "tools".to_string(),
                     serde_json::Value::Object(serde_json::Map::new()),
                 );
             }
-            if !registry::registry().resources().is_empty() {
+            if !self.registry.resources().is_empty() {
                 capabilities.insert(
                     "resources".to_string(),
                     serde_json::Value::Object(serde_json::Map::new()),
@@ -138,36 +206,28 @@ impl Router {
                 "result": {
                     "protocolVersion": "2025-11-25",
                     "capabilities": capabilities,
-                    "serverInfo": {
-                        "name": "name",
-                        "title": "title",
-                        "version": "1.0.0",
-                        "description": "an example mcp",
-                    },
+                    "serverInfo": self.server_info
                 }
             });
         } else if req.method == "tools/list" {
-            return serde_json::json!({"result": { "tools": registry::registry().tools().values().map(|i| (i.params)()).collect::<Vec<_>>() } });
+            return serde_json::json!({"result": { "tools": self.registry.tools().values().map(|i| (i.params)()).collect::<Vec<_>>() } });
         } else if req.method == "tools/call" {
             if let Ok(tool_call) = serde_json::from_value::<ToolCall>(
                 req.params.clone().unwrap_or(serde_json::json!({})),
             ) {
-                if let Some(tool) = registry::registry().get_tool(&tool_call.name) {
+                if let Some(tool) = self.registry.get_tool(&tool_call.name) {
                     match (tool.from_args)(
                         &tool_call.arguments.clone().unwrap_or(serde_json::json!({})),
                     ) {
                         registry::FromArgResult::Tool(caller) => {
                             let executor = caller.get_executor();
-                            return Router::execution_result_to_mcp(
-                                executor.execute(),
-                                "content".to_string(),
-                            );
+                            return Router::execution_result_to_mcp(executor.execute(), "content");
                         }
                         registry::FromArgResult::Error(s) => {
                             return serde_json::json!({"error": {"code": -32602, "message": format!("invalid parameters for tools/call {}", s)}});
                         }
-                        _ => {
-                            return serde_json::json!({"error": {"code": -32602, "message": format!("invalid parameters for tools/call {}", tool_call.name)}});
+                        registry::FromArgResult::Resource(_) => {
+                            return serde_json::json!({"error": {"code": -32600, "message": "server is misconfigured, a resource was registered as a tool"}});
                         }
                     }
                 }
@@ -176,12 +236,13 @@ impl Router {
             return serde_json::json!({"error": { "code": -32602, "message": "malformed request from LLM"}});
         } else if req.method == "resources/list" {
             // TODO: paging
-            let resources: Vec<registry::MCPMeta> = registry::registry()
+            let resources: Vec<registry::MCPMeta> = self
+                .registry
                 .resources()
-                .iter()
-                .filter_map(|(_, i)| {
-                    if !(i.is_template)() {
-                        Some((i.meta)())
+                .values()
+                .filter_map(|resource| {
+                    if !(resource.is_template)() {
+                        Some((resource.meta)())
                     } else {
                         None
                     }
@@ -189,7 +250,8 @@ impl Router {
                 .collect();
             return serde_json::json!({"result": {"resources": resources }});
         } else if req.method == "resources/templates/list" {
-            let resources: Vec<registry::MCPTemplateMeta> = registry::registry()
+            let resources: Vec<registry::MCPTemplateMeta> = self
+                .registry
                 .resources()
                 .values()
                 .filter_map(|i| {
@@ -205,7 +267,7 @@ impl Router {
             if let Ok(resource_call) = serde_json::from_value::<ResourceCall>(
                 req.params.clone().unwrap_or(serde_json::json!({})),
             ) {
-                if let Some(r) = registry::registry().get_resource(&resource_call.uri) {
+                if let Some(r) = self.registry.get_resource(&resource_call.uri) {
                     // exact match
                     if let registry::FromArgResult::Resource(a) =
                         (r.from_args)(&serde_json::json!({ "dsn": &resource_call.uri }))
@@ -216,57 +278,113 @@ impl Router {
                                 .iter()
                                 .map(|a| registry::MCPExecutionResult::RESOURCE(a.clone()))
                                 .collect(),
-                            "contents".to_string(),
+                            "contents",
                         );
                     } else {
                         return serde_json::json!({"error": { "code": -32603, "message": "Internal error: resource structs may only contain a DSN field or must be empty"}});
                     }
                 } else {
-                    {
-                        let dsn = match udsn::DSN::parse(resource_call.uri.clone()) {
-                            Some(d) => d,
-                            _ => {
-                                return serde_json::json!({"error": { "code": -32602, "message": "malformed requested, expected uri in params"}});
-                            }
-                        };
-                        for (_, i) in registry::registry().resources().iter() {
-                            if (i.is_template)()
-                                && (i.serves)(&dsn)
-                                && let registry::FromArgResult::Resource(a) =
-                                    (i.from_args)(&serde_json::json!({ "dsn": &resource_call.uri }))
-                            {
-                                return Router::execution_result_to_mcp(
-                                    a.get_executor()
-                                        .execute()
-                                        .iter()
-                                        .map(|a| registry::MCPExecutionResult::RESOURCE(a.clone()))
-                                        .collect(),
-                                    "contents".to_string(),
-                                );
-                            }
+                    let dsn = match udsn::DSN::parse(resource_call.uri.clone()) {
+                        Some(d) => d,
+                        _ => {
+                            return serde_json::json!({"error": { "code": -32602, "message": "malformed request, expected uri in params"}});
+                        }
+                    };
+                    for (_, i) in self.registry.resources().iter() {
+                        if (i.is_template)()
+                            && (i.serves)(&dsn)
+                            && let registry::FromArgResult::Resource(a) =
+                                (i.from_args)(&serde_json::json!({ "dsn": &resource_call.uri }))
+                        {
+                            return Router::execution_result_to_mcp(
+                                a.get_executor()
+                                    .execute()
+                                    .iter()
+                                    .map(|a| registry::MCPExecutionResult::RESOURCE(a.clone()))
+                                    .collect(),
+                                "contents",
+                            );
                         }
                     }
-                };
+                }
                 return serde_json::json!({"error": {"code": -32602, "message": "no valid resource handler found for requested uri"}});
             }
             return serde_json::json!({"error": { "code": -32600, "message": format!("malformed request from LLM: {}", req.method)}});
         }
-        // Method not found: -32601 (Capability not supported)
-        // Invalid prompt name: -32602 (Invalid params)
-        // Missing required arguments: -32602 (Invalid params)
-        // Internal errors: -32603 (Internal error)
         serde_json::json!({"error": { "code": -32601, "message": format!("method not found: {}", req.method)}})
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Request, RequestID, Router};
+    use super::{Request, RequestID, Router, ServerInfo};
     use serde_json::json;
 
     #[test]
+    fn initialize() {
+        let resp = Router::new().exec(Request {
+            jsonrpc: "2.0".to_string(),
+            id: RequestID::Number(123),
+            method: "initialize".to_string(),
+            params: None,
+        });
+        let cmp = json!({
+            "jsonrpc": "2.0",
+            "id": 123,
+            "result": {
+                "capabilities": {
+                    "tools": {},
+                    "resources": {},
+                },
+                "protocolVersion": "2025-11-25",
+                "serverInfo": {
+                    "name": "Example MCP Server",
+                    "version": "1.0.0",
+                }
+            }
+        }
+        );
+        assert_eq!(cmp, resp);
+    }
+
+    #[test]
+    fn initialize_w_server_info() {
+        let resp = Router::new()
+            .server_info(
+                ServerInfo::new()
+                    .name("test")
+                    .description("Hello world!")
+                    .build(),
+            )
+            .exec(Request {
+                jsonrpc: "2.0".to_string(),
+                id: RequestID::Number(123),
+                method: "initialize".to_string(),
+                params: None,
+            });
+        let cmp = json!({
+            "jsonrpc": "2.0",
+            "id": 123,
+            "result": {
+                "capabilities": {
+                    "tools": {},
+                    "resources": {},
+                },
+                "protocolVersion": "2025-11-25",
+                "serverInfo": {
+                    "name": "test",
+                    "description": "Hello world!",
+                    "version": "1.0.0",
+                }
+            }
+        }
+        );
+        assert_eq!(cmp, resp);
+    }
+
+    #[test]
     fn basic_router() {
-        let resp = Router::exec(Request {
+        let resp = Router::new().exec(Request {
             jsonrpc: "2.0".to_string(),
             id: RequestID::Number(123),
             method: "tools/list".to_string(),
@@ -302,7 +420,7 @@ mod tests {
 
     #[test]
     fn basic_tool_call() {
-        let resp = Router::exec(Request {
+        let resp = Router::new().exec(Request {
             jsonrpc: "2.0".to_string(),
             id: RequestID::Number(42),
             method: "tools/call".to_string(),
@@ -327,7 +445,7 @@ mod tests {
 
     #[test]
     fn basic_tool_call_err() {
-        let resp = Router::exec(Request {
+        let resp = Router::new().exec(Request {
             jsonrpc: "2.0".to_string(),
             id: RequestID::Str("a666".to_string()),
             method: "tools/call".to_string(),
@@ -352,7 +470,7 @@ mod tests {
 
     #[test]
     fn basic_resource_list() {
-        let resp = Router::exec(Request {
+        let resp = Router::new().exec(Request {
             jsonrpc: "2.0".to_string(),
             id: RequestID::Number(42),
             method: "resources/list".to_string(),
@@ -375,7 +493,7 @@ mod tests {
     }
     #[test]
     fn basic_resource_call() {
-        let resp = Router::exec(Request {
+        let resp = Router::new().exec(Request {
             jsonrpc: "2.0".to_string(),
             id: RequestID::Str("123".to_string()),
             method: "resources/read".to_string(),
@@ -396,5 +514,131 @@ mod tests {
             }
         });
         assert_eq!(cmp, resp);
+    }
+
+    #[test]
+    fn override_router() {
+        use std::collections::HashMap;
+        let registry = registry::Registry::new_from(HashMap::new(), HashMap::new());
+        let router = Router::new().registry(&registry).build();
+        let resp = router.exec(Request {
+            jsonrpc: "2.0".to_string(),
+            id: RequestID::Number(42),
+            method: "resources/list".to_string(),
+            params: None,
+        });
+        let cmp = json!({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "result": {
+                "resources": [],
+            }
+        });
+        assert_eq!(cmp, resp);
+        let resp2 = router.exec(Request {
+            jsonrpc: "2.0".to_string(),
+            id: RequestID::Number(123),
+            method: "tools/list".to_string(),
+            params: None,
+        });
+        let cmp2 = json!({
+            "jsonrpc": "2.0",
+            "id": 123,
+            "result": { "tools": [
+            ]}
+        }
+        );
+        assert_eq!(cmp2, resp2);
+    }
+
+    #[derive(serde::Deserialize)]
+    pub struct ManualResource {
+        dsn: udsn::DSN,
+    }
+
+    use crate::registry::{
+        FromArgResult, MCPMeta, MCPResource, MCPResourceExecutor, MCPResourceResult,
+    };
+    use serde_json::Value;
+
+    impl MCPResourceExecutor for ManualResource {
+        fn execute(&self) -> Vec<MCPResourceResult> {
+            vec![MCPResourceResult::new(
+                "file:///example".to_string(),
+                "example file".to_string(),
+            )]
+        }
+
+        fn serves(_dsn: &udsn::DSN) -> bool {
+            true
+        }
+
+        fn is_template() -> bool {
+            false
+        }
+    }
+
+    impl MCPResource for ManualResource {
+        fn get_executor(&self) -> &dyn MCPResourceExecutor {
+            self
+        }
+        fn meta() -> MCPMeta {
+            MCPMeta::new()
+                .name("meta_example")
+                .uri("manual-resource:///")
+                .build()
+        }
+        fn params() -> Value {
+            Value::Null
+        }
+        fn from_args(v: &Value) -> FromArgResult {
+            match serde_json::from_value::<Self>(v.clone()) {
+                Ok(s) => FromArgResult::Resource(Box::new(s)),
+                Err(e) => {
+                    /* handle your error here */
+                    FromArgResult::Error(e.to_string())
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn override_router_w_static_resource() {
+        use std::collections::HashMap;
+        let registry = registry::Registry::new_from(HashMap::new(), HashMap::new());
+        registry.register_resource_adapter::<ManualResource>("file:///config");
+        let router = Router::new().registry(&registry).build();
+        let resp = router.exec(Request {
+            jsonrpc: "2.0".to_string(),
+            id: RequestID::Number(42),
+            method: "resources/list".to_string(),
+            params: None,
+        });
+        let cmp = json!({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "result": {
+                "resources": [
+                    {"name": "meta_example",
+                     "uri": "manual-resource:///",
+                    }
+                ],
+            }
+        });
+        assert_eq!(cmp, resp);
+        let resp2 = router.exec(Request {
+            jsonrpc: "2.0".to_string(),
+            id: RequestID::Number(123),
+            method: "tools/list".to_string(),
+            params: None,
+        });
+        let cmp2 = json!({
+            "jsonrpc": "2.0",
+            "id": 123,
+            "result": { "tools": [
+            ]}
+        }
+        );
+        assert_eq!(cmp2, resp2);
     }
 }

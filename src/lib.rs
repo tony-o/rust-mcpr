@@ -46,8 +46,8 @@ mod tests {
     impl MCPResourceExecutor for TestResource {
         fn execute(&self) -> Vec<MCPResourceResult> {
             vec![
-                MCPResourceResult::builder("test://forward".to_string(), self.dsn.to_string()),
-                MCPResourceResult::builder(
+                MCPResourceResult::new("test://forward".to_string(), self.dsn.to_string()),
+                MCPResourceResult::new(
                     "test://reverse".to_string(),
                     self.dsn.to_string().chars().rev().collect(),
                 ),

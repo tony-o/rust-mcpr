@@ -53,7 +53,7 @@ fn classify_inner(ty: &syn::Type, is_array: bool, is_optional: bool) -> (&'stati
     ("object", is_array, is_optional)
 }
 
-fn type_to_json(name: &String, f: &Field) -> proc_macro2::TokenStream {
+fn type_to_json(name: &str, f: &Field) -> proc_macro2::TokenStream {
     let (jt, is_array, _) = classify_inner(&f.ty, false, false);
 
     if is_array {
@@ -74,7 +74,7 @@ fn type_to_json(name: &String, f: &Field) -> proc_macro2::TokenStream {
     }
 }
 
-fn parse_register_meta(ast: &DeriveInput) -> registry::MCPMeta {
+fn parse_register_meta(ast: &DeriveInput) -> Result<registry::MCPMeta, String> {
     let mut title = None;
     let mut description = None;
     let mut icons = None;
@@ -107,7 +107,10 @@ fn parse_register_meta(ast: &DeriveInput) -> registry::MCPMeta {
                     match serde_json::from_str::<Vec<registry::MCPMetaIcon>>(&s.value()) {
                         Ok(a) => icons = Some(a),
                         Err(e) => {
-                            eprintln!("WARNING: failed to parse icons for {}\n{}", &ast.ident, e)
+                            return Err(format!(
+                                "failed to parse icons for {}, this must be valid json\n{}",
+                                &ast.ident, e
+                            ));
                         }
                     }
                 } else if nv.path.is_ident("name") {
@@ -121,23 +124,38 @@ fn parse_register_meta(ast: &DeriveInput) -> registry::MCPMeta {
         }
     }
 
-    registry::MCPMeta {
+    Ok(registry::MCPMeta {
         title,
         name,
         description,
         uri,
         mime_type,
         icons,
-    }
+    })
 }
 
 fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
-    let meta = parse_register_meta(&ast);
+    let meta = match parse_register_meta(&ast) {
+        Ok(m) => m,
+        Err(e) => {
+            return syn::Error::new_spanned(&ast.ident, e)
+                .to_compile_error()
+                .into();
+        }
+    };
 
     let name = &ast.ident;
     let name_s = name.to_string();
 
+    if info_type == "Resource" && meta.uri == "unset:///" {
+        return syn::Error::new_spanned(
+            &ast.ident,
+            format!("Resource {} must have a #[meta(uri = ...) component", name),
+        )
+        .to_compile_error()
+        .into();
+    }
     let ast_d = match &ast.data {
         Data::Struct(f) => f,
         _ => {
@@ -159,7 +177,7 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
         _ => vec![],
     };
 
-    let snek = ccase!(snake, name_s.clone());
+    let snek = ccase!(snake, name_s.as_str());
     let xn = format_ident!("{}", dstruct);
     let ityp = format_ident!("{}", info_type);
     let mtitle = meta.title.clone().unwrap_or(name_s.clone());
@@ -183,10 +201,10 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
 
     let prop_toks: Vec<proc_macro2::TokenStream> = params
         .iter()
-        .map(|(nm, f)| type_to_json(nm, &(*f).clone()))
+        .map(|(nm, f)| type_to_json(nm.as_str(), f))
         .collect();
 
-    let from_args_rval = if info_type == "TOOL" {
+    let from_args_rval = if info_type == "Tool" {
         quote! { registry::FromArgResult::Tool(Box::new(a)) }
     } else {
         quote! { registry::FromArgResult::Resource(Box::new(a)) }
@@ -243,14 +261,14 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
 
     let executor_class = format_ident!(
         "MCP{}Executor",
-        if info_type == "TOOL" {
+        if info_type == "Tool" {
             "Tool"
         } else {
             "Resource"
         }
     );
 
-    let resource_extras = if info_type == "TOOL" {
+    let resource_extras = if info_type == "Tool" {
         quote! {
             is_template: || false,
             serves: |_| false,
@@ -272,7 +290,7 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
                     "inputSchema": {
                         "type": "object",
                         "properties": {#(#prop_toks),*},
-                        "required": [#(#required),*] //...
+                        "required": [#(#required),*]
                     },
                 })
             }
@@ -310,17 +328,16 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
             }
         }
     };
-    //println!("{}", expanded.to_string());
 
     expanded.into()
 }
 
 #[proc_macro_derive(MCPTool, attributes(meta))]
 pub fn derive_mcp_tool(input: TokenStream) -> TokenStream {
-    generic_derive("MCPTool".to_string(), "TOOL".to_string(), input)
+    generic_derive("MCPTool".to_string(), "Tool".to_string(), input)
 }
 
 #[proc_macro_derive(MCPResource, attributes(meta))]
 pub fn derive_mcp_resource(input: TokenStream) -> TokenStream {
-    generic_derive("MCPResource".to_string(), "RESOURCE".to_string(), input)
+    generic_derive("MCPResource".to_string(), "Resource".to_string(), input)
 }

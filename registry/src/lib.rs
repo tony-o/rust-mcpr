@@ -1,5 +1,7 @@
+use base64::{Engine as _, engine::general_purpose};
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock, RwLockReadGuard};
+use tracing::{error, warn};
 
 use serde_json::Value;
 
@@ -8,8 +10,8 @@ pub use inventory as _i;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum InfoType {
-    TOOL,
-    RESOURCE,
+    Tool,
+    Resource,
 }
 
 pub enum FromArgResult {
@@ -32,9 +34,8 @@ pub struct Info {
 inventory::collect!(Info);
 
 pub struct Registry {
-    tools: HashMap<String, &'static Info>,
-    resources: HashMap<String, &'static Info>,
-    resource_instances: HashMap<String, Box<dyn MCPResource + Send + Sync>>,
+    tools: RwLock<HashMap<String, &'static Info>>,
+    resources: RwLock<HashMap<String, &'static Info>>,
 }
 
 impl Registry {
@@ -42,7 +43,7 @@ impl Registry {
         let mut tools = HashMap::new();
         let mut resources = HashMap::new();
         for i in inventory::iter::<Info>() {
-            if i.info_type == InfoType::TOOL {
+            if i.info_type == InfoType::Tool {
                 tools.insert(i.name.to_string(), i);
             } else {
                 resources.insert((i.meta)().uri.to_string(), i);
@@ -51,39 +52,100 @@ impl Registry {
         Registry::new_from(tools, resources)
     }
 
-    fn new_from(
+    pub fn new_from(
         tools: HashMap<String, &'static Info>,
         resources: HashMap<String, &'static Info>,
     ) -> Self {
         Self {
-            tools,
-            resources,
-            resource_instances: HashMap::new(),
+            tools: RwLock::new(tools),
+            resources: RwLock::new(resources),
         }
     }
 
-    pub fn get_tool(&self, name: &str) -> Option<&Info> {
-        Some(self.tools.get(name)?)
+    pub fn get_tool(&self, name: &str) -> Option<&'static Info> {
+        match self.tools.read() {
+            Ok(t) => t.get(name).copied(),
+            Err(e) => Some(e.into_inner().get(name)?),
+        }
     }
 
-    pub fn get_resource(&self, name: &str) -> Option<&Info> {
-        Some(self.resources.get(name)?)
+    pub fn get_resource(&self, uri: &str) -> Option<&'static Info> {
+        match self.resources.read() {
+            Ok(t) => t.get(uri).copied(),
+            Err(e) => Some(e.into_inner().get(uri)?),
+        }
     }
 
-    pub fn tools(&self) -> &HashMap<String, &Info> {
-        &self.tools
+    pub fn tools(&self) -> RwLockReadGuard<'_, HashMap<String, &'static Info>> {
+        match self.tools.read() {
+            Ok(t) => t,
+            Err(e) => {
+                error!("Error reading from tool lock: {}", e);
+                panic!("Error reading from tool lock: {}", e);
+            }
+        }
     }
 
-    pub fn resources(&self) -> &HashMap<String, &Info> {
-        &self.resources
+    pub fn resources(&self) -> RwLockReadGuard<'_, HashMap<String, &'static Info>> {
+        match self.resources.read() {
+            Ok(t) => t,
+            Err(e) => {
+                error!("Error reading from resources lock: {}", e);
+                panic!("Error reading from resources lock: {}", e);
+            }
+        }
     }
 
-    pub fn register_resource_adapter(
-        &mut self,
-        name: String,
-        resource: Box<dyn MCPResource + Send + Sync>,
-    ) {
-        self.resource_instances.insert(name.clone(), resource);
+    pub fn register_resource_adapter<T>(&self, uri: &str)
+    where
+        T: MCPResource + MCPResourceExecutor + Send + Sync + 'static,
+    {
+        let nfo: &'static Info = Box::leak(Box::new(Info {
+            name: Box::leak(uri.to_string().into_boxed_str()),
+            info_type: InfoType::Resource,
+            params: T::params,
+            from_args: T::from_args,
+            meta: T::meta,
+            is_template: T::is_template,
+            serves: T::serves,
+        }));
+        let mut resources = match self.resources.write() {
+            Ok(t) => t,
+            Err(e) => {
+                error!("Failed to lock resources for writing: {}", e);
+                return;
+            }
+        };
+        if resources.get(uri).is_some() {
+            warn!("Overwriting resource handler {}", uri);
+        }
+        resources.insert(uri.to_string(), nfo);
+    }
+
+    pub fn register_tool_adapter<T>(&self, name: &str)
+    where
+        T: MCPTool + MCPToolExecutor + Send + Sync + 'static,
+    {
+        let nfo: &'static Info = Box::leak(Box::new(Info {
+            name: Box::leak(name.to_string().into_boxed_str()),
+            info_type: InfoType::Tool,
+            params: T::params,
+            from_args: T::from_args,
+            meta: T::meta,
+            is_template: || false,
+            serves: |_| false,
+        }));
+        let mut tools = match self.tools.write() {
+            Ok(t) => t,
+            Err(e) => {
+                error!("Failed to lock tools for writing: {}", e);
+                return;
+            }
+        };
+        if tools.get(name).is_some() {
+            warn!("Overwriting tool handler {}", name);
+        }
+        tools.insert(name.to_string(), nfo);
     }
 }
 
@@ -118,6 +180,8 @@ pub trait MCPResource {
         Self: Sized;
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MCPExecutionResultImage {
     pub mime_type: String,
     pub data: Vec<u8>,
@@ -169,7 +233,7 @@ pub struct MCPResourceResult {
 }
 
 impl MCPResourceResult {
-    pub fn builder(uri: String, name: String) -> Self {
+    pub fn new(uri: String, name: String) -> Self {
         Self {
             uri,
             name,
@@ -181,6 +245,35 @@ impl MCPResourceResult {
             blob: None,
             text: None,
         }
+    }
+
+    pub fn title(&mut self, title: &str) -> &mut Self {
+        self.title = Some(title.to_string());
+        self
+    }
+    pub fn description(&mut self, description: &str) -> &mut Self {
+        self.description = Some(description.to_string());
+        self
+    }
+    pub fn mime_type(&mut self, mime_type: &str) -> &mut Self {
+        self.mime_type = Some(mime_type.to_string());
+        self
+    }
+    pub fn size(&mut self, size: u64) -> &mut Self {
+        self.size = Some(size);
+        self
+    }
+    pub fn blob(&mut self, data: Vec<u8>) -> &mut Self {
+        let blob = general_purpose::STANDARD.encode(&data).to_string();
+        self.blob = Some(blob);
+        self
+    }
+    pub fn text(&mut self, text: &str) -> &mut Self {
+        self.text = Some(text.to_string());
+        self
+    }
+    pub fn build(&mut self) -> Self {
+        self.to_owned()
     }
 }
 
@@ -196,6 +289,7 @@ pub enum MCPExecutionResult {
 pub trait MCPToolExecutor {
     fn execute(&self) -> Vec<MCPExecutionResult>;
 }
+
 pub trait MCPResourceExecutor {
     fn execute(&self) -> Vec<MCPResourceResult>;
     fn serves(dsn: &udsn::DSN) -> bool
@@ -205,6 +299,7 @@ pub trait MCPResourceExecutor {
     where
         Self: Sized;
 }
+
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MCPMetaIcon {
@@ -213,12 +308,14 @@ pub struct MCPMetaIcon {
     pub sizes: Vec<String>,
 }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MCPMeta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub uri: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -226,6 +323,42 @@ pub struct MCPMeta {
     pub mime_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icons: Option<Vec<MCPMetaIcon>>,
+}
+
+impl MCPMeta {
+    pub fn new() -> Self {
+        Self {
+            uri: "".to_string(),
+            name: "".to_string(),
+            title: None,
+            description: None,
+            mime_type: None,
+            icons: None,
+        }
+    }
+    pub fn uri(&mut self, uri: &str) -> &mut Self {
+        self.uri = uri.to_string();
+        self
+    }
+    pub fn name(&mut self, name: &str) -> &mut Self {
+        self.name = name.to_string();
+        self
+    }
+    pub fn title(&mut self, title: &str) -> &mut Self {
+        self.title = Some(title.to_string());
+        self
+    }
+    pub fn description(&mut self, description: &str) -> &mut Self {
+        self.description = Some(description.to_string());
+        self
+    }
+    pub fn mime_type(&mut self, mime_type: &str) -> &mut Self {
+        self.mime_type = Some(mime_type.to_string());
+        self
+    }
+    pub fn build(&mut self) -> Self {
+        self.to_owned()
+    }
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -267,7 +400,7 @@ mod tests {
                 "t1".to_string(),
                 &Info {
                     name: "abc",
-                    info_type: InfoType::TOOL,
+                    info_type: InfoType::Tool,
                     from_args: |_| FromArgResult::Error("tool".to_string()),
                     is_template: || false,
                     serves: |_| false,
@@ -286,7 +419,7 @@ mod tests {
                 "r1".to_string(),
                 &Info {
                     name: "xyz",
-                    info_type: InfoType::RESOURCE,
+                    info_type: InfoType::Resource,
                     from_args: |_| FromArgResult::Error("resource".to_string()),
                     params: || serde_json::Value::String("".to_string()),
                     is_template: || false,

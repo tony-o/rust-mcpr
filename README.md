@@ -6,7 +6,6 @@ there are a few modes this library was intended to be used in:
 
 - see no evil, hear no evil, speak (see: ez mode below)
 - see no evil, hear, and speak mode (see: medium difficulty below)
-- i need a lot of edge case management
 
 ## ez mode
 
@@ -35,7 +34,7 @@ impl MCPToolExecutor for FingerSaw {
         /* self here is a FingerSaw, you can do whatever you need to in here */
 
         vec![MCPExecutionResult::TEXT(format!(
-            "example={},optional_example={:?}"
+            "example={},optional_example={:?}",
             self.example,
             self.optional_example,
         ))]
@@ -44,31 +43,34 @@ impl MCPToolExecutor for FingerSaw {
 
 /* somewhere else in a transport mechanism, shown here as a rocket route */
 #[post("/mcp", format = "json", data = "<body>")]
-pub async mcp(body: Json<Value>) -> Json<Value> {
-    Json(mcpr::router::Router::exec_from_value(body.into_inner()))
+pub async fn mcp(body: Json<Value>) -> Json<Value> {
+    /* you might put this default router into a fairing or whatever your HTTP framework's analog */
+    Json(mcpr::router::Router::default().exec_from_value(body.into_inner()))
 }
 ```
 
 ### ez mode resources
 
 ```rust
-use mcpr::macros::MCPTool;
+use mcpr::macros::MCPResource;
 use mcpr::registry::{
-    MCPExecutionResult, MCPTool, MCPToolExecutor,
+    MCPResourceResult, MCPResourceExecutor, MCPResource,
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(MCPTool, Deserialize, Serialize)]
+#[derive(MCPResource, Deserialize, Serialize)]
 #[meta(title = "HandSaws", description = "Let's the LLM know what handsaws you can use the FingerSaw on")]
 struct HandSaw {
     dsn: udsn::DSN, /* this is optional and the only field this struct can ever get populated with
                      * by way of the MCP spec. you can either use the DSN as a resource template
                      * or you need to manually list your resources per the spec.
+                     * this struct member can be omitted safely if it's not needed in the resource
+                     * execution
                      */
 }
 
-impl MCPToolExecutor for HandSaw {
-    fn execute(&self) -> Vec<MCPExecutionResult> {
+impl MCPResourceExecutor for HandSaw {
+    fn execute(&self) -> Vec<MCPResourceResult> {
         /* self here is a HandSaw, you can do whatever you need to in here */
         if self.dsn.protocol == "file" {
             /* serve files */
@@ -76,7 +78,7 @@ impl MCPToolExecutor for HandSaw {
             /* do something with git */
         }
 
-        vec![MCPExecutionResult::TEXT("see the documentation below for more information about MCPExecutionResult"))]
+        vec![MCPResourceResult::new("file:///example".to_string(), "example file".to_string())]
     }
 
     fn serves(dsn: &udsn::DSN) -> bool {
@@ -93,11 +95,91 @@ impl MCPToolExecutor for HandSaw {
  * to do any manual RPC handling for MCP methods
  */
 #[post("/mcp", format = "json", data = "<body>")]
-pub async mcp(body: Json<Value>) -> Json<Value> {
-    Json(mcpr::router::Router::exec_from_value(body.into_inner()))
+pub async fn mcp(body: Json<Value>) -> Json<Value> {
+    /* you might put this default router into a fairing or whatever your HTTP framework's analog */
+    Json(mcpr::router::Router::default().exec_from_value(body.into_inner()))
 }
 ```
 
-# TODO
+## medium difficulty
+
+medium difficulty is where you might end up if you are generating resources or have specific routing requirements. good use cases for this
+are:
+
+- you want multiple MCPs handled in one transport mechanism
+  - eg one router for http transport @ /v1/mcp and another @ /v2/mcp
+- you have static resources (not templates) you want to list in the router initialization handshake
+  - eg you only want to mcp to know of files in a directory at server startup
+  - you're generating access/commands from a config file and will handle them programmatically
+  - you are willing to implement both traits needed manually rather than using a resource template
+
+example resource:
+
+```rust
+#[derive(serde::Deserialize)]
+pub struct ManualResource {
+    dsn: udsn::DSN,
+}
+
+use mcpr::registry::{
+    FromArgResult, MCPMeta, MCPResource, MCPResourceExecutor, MCPResourceResult,
+};
+use serde_json::Value;
+
+impl MCPResourceExecutor for ManualResource {
+    fn execute(&self) -> Vec<MCPResourceResult> {
+        println!("dsn executor called: {}", self.dsn.to_string());
+        vec![]
+    }
+
+    fn serves(dsn: &udsn::DSN) -> bool {
+        /* this is only called when is_template is true
+         * the DSN must match exactly if is_template is false
+         */
+        dsn.protocol == "manual-resource"
+    }
+
+    fn is_template() -> bool {
+        true
+    }
+}
+
+impl MCPResource for ManualResource {
+    fn get_executor(&self) -> &dyn MCPResourceExecutor {
+        self
+    }
+    fn meta() -> MCPMeta {
+        MCPMeta::default()
+            .name("meta_example")
+            .uri("manual-resource:///")
+            .build()
+    }
+    fn params() -> Value {
+        Value::Null
+    }
+    fn from_args(v: &Value) -> FromArgResult {
+        match serde_json::from_value::<Self>(v.clone()) {
+            Ok(s) => FromArgResult::Resource(Box::new(s)),
+            Err(e) => {
+                /* handle your error here */
+                FromArgResult::Error(e.to_string())
+            }
+        }
+    }
+}
+
+/* elsewhere in your registry initializer */
+
+pub fn init_router() {
+    use std::collections::HashMap;
+    let registry = registry::Registry::new_from(HashMap::new(), HashMap::new());
+    registry.register_resource_adapter::<ManualResource>("manual-resource://{some path}");
+    let router = Router::default().registry(&registry).build();
+
+    /* do whatever you need to do with your router here */
+}
+```
+
+## TODO
 
 - document MCPExecutionResult
