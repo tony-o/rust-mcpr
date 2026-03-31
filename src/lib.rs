@@ -1,16 +1,18 @@
+extern crate self as mcpr;
 pub use macros::{MCPResource, MCPTool};
 pub use registry;
 pub mod router;
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
     use macros::{MCPResource, MCPTool};
     use registry::{
         MCPExecutionResult, MCPResource, MCPResourceExecutor, MCPResourceResult, MCPTool,
         MCPToolExecutor,
     };
     use serde::{Deserialize, Serialize};
-    use serde_json::{Value, json};
+    use serde_json::Value;
 
     #[derive(MCPTool, Deserialize, Serialize)]
     #[meta(title = "ABCCamel struct", description = "abc camel description")]
@@ -21,8 +23,9 @@ mod tests {
         ooarr: Option<Vec<i32>>,
     }
 
+    #[async_trait]
     impl MCPToolExecutor for ABCCamel {
-        fn execute(&self) -> Vec<MCPExecutionResult> {
+        async fn execute(&self) -> Vec<MCPExecutionResult> {
             vec![MCPExecutionResult::TEXT(format!(
                 "test={},oooptional={},arr={:?},ooarr={:?}",
                 self.test,
@@ -43,8 +46,9 @@ mod tests {
         dsn: udsn::DSN,
     }
 
+    #[async_trait]
     impl MCPResourceExecutor for TestResource {
-        fn execute(&self) -> Vec<MCPResourceResult> {
+        async fn execute(&self) -> Vec<MCPResourceResult> {
             vec![
                 MCPResourceResult::new("test://forward".to_string(), self.dsn.to_string()),
                 MCPResourceResult::new(

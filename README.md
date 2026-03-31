@@ -15,10 +15,6 @@ implement everything you need to do in this mode. see below in this readme for a
 ### ez mode tools
 
 ```rust
-use mcpr::macros::MCPTool;
-use mcpr::registry::{
-    MCPExecutionResult, MCPTool, MCPToolExecutor,
-};
 use serde::{Deserialize, Serialize};
 
 #[derive(MCPTool, Deserialize, Serialize)]
@@ -45,16 +41,15 @@ impl MCPToolExecutor for FingerSaw {
 #[post("/mcp", format = "json", data = "<body>")]
 pub async fn mcp(body: Json<Value>) -> Json<Value> {
     /* you might put this default router into a fairing or whatever your HTTP framework's analog */
-    Json(mcpr::router::Router::default().exec_from_value(body.into_inner()))
+    Json(mcpr::router::Router::new().exec_from_value(body.into_inner()))
 }
 ```
 
 ### ez mode resources
 
 ```rust
-use mcpr::macros::MCPResource;
 use mcpr::registry::{
-    MCPResourceResult, MCPResourceExecutor, MCPResource,
+    MCPResource, MCPResourceExecutor, MCPResourceResult,
 };
 use serde::{Deserialize, Serialize};
 
@@ -97,7 +92,7 @@ impl MCPResourceExecutor for HandSaw {
 #[post("/mcp", format = "json", data = "<body>")]
 pub async fn mcp(body: Json<Value>) -> Json<Value> {
     /* you might put this default router into a fairing or whatever your HTTP framework's analog */
-    Json(mcpr::router::Router::default().exec_from_value(body.into_inner()))
+    Json(mcpr::router::Router::new().exec_from_value(body.into_inner()))
 }
 ```
 
@@ -116,15 +111,15 @@ are:
 example resource:
 
 ```rust
-#[derive(serde::Deserialize)]
-pub struct ManualResource {
-    dsn: udsn::DSN,
-}
-
 use mcpr::registry::{
     FromArgResult, MCPMeta, MCPResource, MCPResourceExecutor, MCPResourceResult,
 };
 use serde_json::Value;
+
+#[derive(serde::Deserialize)]
+pub struct ManualResource {
+    dsn: udsn::DSN,
+}
 
 impl MCPResourceExecutor for ManualResource {
     fn execute(&self) -> Vec<MCPResourceResult> {
@@ -148,11 +143,11 @@ impl MCPResource for ManualResource {
     fn get_executor(&self) -> &dyn MCPResourceExecutor {
         self
     }
-    fn meta() -> MCPMeta {
-        MCPMeta::default()
+    fn meta() -> Vec<MCPMeta> {
+        vec![MCPMeta::new()
             .name("meta_example")
             .uri("manual-resource:///")
-            .build()
+            .build()]
     }
     fn params() -> Value {
         Value::Null
@@ -183,3 +178,7 @@ pub fn init_router() {
 ## TODO
 
 - document MCPExecutionResult
+- fix tool documentation
+- organize all of this
+- make better docs
+- talk about transport or make examples of them, really stick it to 'em

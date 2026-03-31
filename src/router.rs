@@ -1,6 +1,7 @@
 use base64::{Engine as _, engine::general_purpose};
 
 #[derive(serde::Deserialize, serde::Serialize)]
+#[serde(untagged)]
 enum RequestID {
     Str(String),
     Number(i64),
@@ -96,6 +97,10 @@ impl<'a> Router<'a> {
         self.to_owned()
     }
 
+    pub fn registry_ref(&self) -> &registry::Registry {
+        self.registry
+    }
+
     fn execution_result_to_mcp(
         mcper: Vec<registry::MCPExecutionResult>,
         content_key: &str,
@@ -158,17 +163,17 @@ impl<'a> Router<'a> {
         serde_json::json!({"result": result})
     }
 
-    pub fn exec_from_value(&self, v: serde_json::Value) -> serde_json::Value {
+    pub async fn exec_from_value(&self, v: serde_json::Value) -> serde_json::Value {
         match serde_json::from_value::<Request>(v) {
-            Ok(a) => self.exec(a),
+            Ok(a) => self.exec(a).await,
             Err(_) => {
                 serde_json::json!({"jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "invalid request format, expected {jsonrpc:string, id:number|string, method:string, params:optional<object>}"}})
             }
         }
     }
 
-    pub fn exec(&self, req: Request) -> serde_json::Value {
-        match self.execx(&req) {
+    pub async fn exec(&self, req: Request) -> serde_json::Value {
+        match self.execx(&req).await {
             serde_json::Value::Object(mut result_map) => {
                 result_map.insert(
                     "jsonrpc".to_string(),
@@ -187,7 +192,7 @@ impl<'a> Router<'a> {
         }
     }
 
-    fn execx(&self, req: &Request) -> serde_json::Value {
+    async fn execx(&self, req: &Request) -> serde_json::Value {
         if req.method == "initialize" {
             let mut capabilities = serde_json::Map::new();
             if !self.registry.tools().is_empty() {
@@ -221,7 +226,10 @@ impl<'a> Router<'a> {
                     ) {
                         registry::FromArgResult::Tool(caller) => {
                             let executor = caller.get_executor();
-                            return Router::execution_result_to_mcp(executor.execute(), "content");
+                            return Router::execution_result_to_mcp(
+                                executor.execute().await,
+                                "content",
+                            );
                         }
                         registry::FromArgResult::Error(s) => {
                             return serde_json::json!({"error": {"code": -32602, "message": format!("invalid parameters for tools/call {}", s)}});
@@ -236,32 +244,22 @@ impl<'a> Router<'a> {
             return serde_json::json!({"error": { "code": -32602, "message": "malformed request from LLM"}});
         } else if req.method == "resources/list" {
             // TODO: paging
-            let resources: Vec<registry::MCPMeta> = self
-                .registry
-                .resources()
-                .values()
-                .filter_map(|resource| {
-                    if !(resource.is_template)() {
-                        Some((resource.meta)())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            let mut resources: Vec<registry::MCPMeta> = Vec::new();
+            for rsrc in self.registry.resources().values() {
+                if !(rsrc.is_template)() {
+                    resources.extend((rsrc.meta)());
+                }
+            }
             return serde_json::json!({"result": {"resources": resources }});
         } else if req.method == "resources/templates/list" {
-            let resources: Vec<registry::MCPTemplateMeta> = self
-                .registry
-                .resources()
-                .values()
-                .filter_map(|i| {
-                    if (i.is_template)() {
-                        Some(registry::MCPTemplateMeta::from_meta(&(i.meta)()))
-                    } else {
-                        None
+            let mut resources: Vec<registry::MCPTemplateMeta> = Vec::new();
+            for rsrc in self.registry.resources().values() {
+                if (rsrc.is_template)() {
+                    for meta in (rsrc.meta)() {
+                        resources.push(registry::MCPTemplateMeta::from_meta(&meta));
                     }
-                })
-                .collect();
+                }
+            }
             return serde_json::json!({"result": {"resourceTemplates": resources }});
         } else if req.method == "resources/read" {
             if let Ok(resource_call) = serde_json::from_value::<ResourceCall>(
@@ -275,6 +273,7 @@ impl<'a> Router<'a> {
                         return Router::execution_result_to_mcp(
                             a.get_executor()
                                 .execute()
+                                .await
                                 .iter()
                                 .map(|a| registry::MCPExecutionResult::RESOURCE(a.clone()))
                                 .collect(),
@@ -290,7 +289,9 @@ impl<'a> Router<'a> {
                             return serde_json::json!({"error": { "code": -32602, "message": "malformed request, expected uri in params"}});
                         }
                     };
-                    for (_, i) in self.registry.resources().iter() {
+                    let ris: Vec<&'static registry::Info> =
+                        self.registry.resources().values().copied().collect();
+                    for i in ris {
                         if (i.is_template)()
                             && (i.serves)(&dsn)
                             && let registry::FromArgResult::Resource(a) =
@@ -299,6 +300,7 @@ impl<'a> Router<'a> {
                             return Router::execution_result_to_mcp(
                                 a.get_executor()
                                     .execute()
+                                    .await
                                     .iter()
                                     .map(|a| registry::MCPExecutionResult::RESOURCE(a.clone()))
                                     .collect(),
@@ -318,16 +320,19 @@ impl<'a> Router<'a> {
 #[cfg(test)]
 mod tests {
     use super::{Request, RequestID, Router, ServerInfo};
+    use async_trait::async_trait;
     use serde_json::json;
 
-    #[test]
-    fn initialize() {
-        let resp = Router::new().exec(Request {
-            jsonrpc: "2.0".to_string(),
-            id: RequestID::Number(123),
-            method: "initialize".to_string(),
-            params: None,
-        });
+    #[tokio::test]
+    async fn initialize() {
+        let resp = Router::new()
+            .exec(Request {
+                jsonrpc: "2.0".to_string(),
+                id: RequestID::Number(123),
+                method: "initialize".to_string(),
+                params: None,
+            })
+            .await;
         let cmp = json!({
             "jsonrpc": "2.0",
             "id": 123,
@@ -347,8 +352,8 @@ mod tests {
         assert_eq!(cmp, resp);
     }
 
-    #[test]
-    fn initialize_w_server_info() {
+    #[tokio::test]
+    async fn initialize_w_server_info() {
         let resp = Router::new()
             .server_info(
                 ServerInfo::new()
@@ -361,7 +366,8 @@ mod tests {
                 id: RequestID::Number(123),
                 method: "initialize".to_string(),
                 params: None,
-            });
+            })
+            .await;
         let cmp = json!({
             "jsonrpc": "2.0",
             "id": 123,
@@ -382,25 +388,27 @@ mod tests {
         assert_eq!(cmp, resp);
     }
 
-    #[test]
-    fn basic_router() {
-        let resp = Router::new().exec(Request {
-            jsonrpc: "2.0".to_string(),
-            id: RequestID::Number(123),
-            method: "tools/list".to_string(),
-            params: json!({
-                "test": 15,
-                "oooptional": 5,
+    #[tokio::test]
+    async fn basic_router() {
+        let resp = Router::new()
+            .exec(Request {
+                jsonrpc: "2.0".to_string(),
+                id: RequestID::Number(123),
+                method: "tools/list".to_string(),
+                params: json!({
+                    "test": 15,
+                    "oooptional": 5,
+                })
+                .into(),
             })
-            .into(),
-        });
+            .await;
         let cmp = json!({
             "jsonrpc": "2.0",
             "id": 123,
             "result": { "tools": [
                 { "description": "abc camel description",
                   "title": "ABCCamel struct",
-                  "name": "abc_camel",
+                  "name": "ABCCamel",
                   "inputSchema": {
                       "type": "object",
                       "properties": {
@@ -418,21 +426,23 @@ mod tests {
         assert_eq!(cmp, resp);
     }
 
-    #[test]
-    fn basic_tool_call() {
-        let resp = Router::new().exec(Request {
-            jsonrpc: "2.0".to_string(),
-            id: RequestID::Number(42),
-            method: "tools/call".to_string(),
-            params: json!({
-                "name": "abc_camel",
-                "arguments": {
-                    "test": 15,
-                    "arr": [5],
-                }
+    #[tokio::test]
+    async fn basic_tool_call() {
+        let resp = Router::new()
+            .exec(Request {
+                jsonrpc: "2.0".to_string(),
+                id: RequestID::Number(42),
+                method: "tools/call".to_string(),
+                params: json!({
+                    "name": "ABCCamel",
+                    "arguments": {
+                        "test": 15,
+                        "arr": [5],
+                    }
+                })
+                .into(),
             })
-            .into(),
-        });
+            .await;
         let cmp = json!({
             "jsonrpc": "2.0",
             "id": 42,
@@ -443,20 +453,22 @@ mod tests {
         assert_eq!(cmp, resp);
     }
 
-    #[test]
-    fn basic_tool_call_err() {
-        let resp = Router::new().exec(Request {
-            jsonrpc: "2.0".to_string(),
-            id: RequestID::Str("a666".to_string()),
-            method: "tools/call".to_string(),
-            params: json!({
-                "name": "abc_camel",
-                "arguments": {
-                    "arr": [5],
-                }
+    #[tokio::test]
+    async fn basic_tool_call_err() {
+        let resp = Router::new()
+            .exec(Request {
+                jsonrpc: "2.0".to_string(),
+                id: RequestID::Str("a666".to_string()),
+                method: "tools/call".to_string(),
+                params: json!({
+                    "name": "ABCCamel",
+                    "arguments": {
+                        "arr": [5],
+                    }
+                })
+                .into(),
             })
-            .into(),
-        });
+            .await;
         let cmp = json!({
             "jsonrpc": "2.0",
             "id": "a666",
@@ -468,14 +480,16 @@ mod tests {
         assert_eq!(cmp, resp);
     }
 
-    #[test]
-    fn basic_resource_list() {
-        let resp = Router::new().exec(Request {
-            jsonrpc: "2.0".to_string(),
-            id: RequestID::Number(42),
-            method: "resources/list".to_string(),
-            params: None,
-        });
+    #[tokio::test]
+    async fn basic_resource_list() {
+        let resp = Router::new()
+            .exec(Request {
+                jsonrpc: "2.0".to_string(),
+                id: RequestID::Number(42),
+                method: "resources/list".to_string(),
+                params: None,
+            })
+            .await;
         let cmp = json!({
             "jsonrpc": "2.0",
             "id": 42,
@@ -491,14 +505,16 @@ mod tests {
         });
         assert_eq!(cmp, resp);
     }
-    #[test]
-    fn basic_resource_call() {
-        let resp = Router::new().exec(Request {
-            jsonrpc: "2.0".to_string(),
-            id: RequestID::Str("123".to_string()),
-            method: "resources/read".to_string(),
-            params: Some(json!({ "uri": "git://some-repo" })),
-        });
+    #[tokio::test]
+    async fn basic_resource_call() {
+        let resp = Router::new()
+            .exec(Request {
+                jsonrpc: "2.0".to_string(),
+                id: RequestID::Str("123".to_string()),
+                method: "resources/read".to_string(),
+                params: Some(json!({ "uri": "git://some-repo" })),
+            })
+            .await;
         let cmp = json!({
             "jsonrpc": "2.0",
             "id": "123",
@@ -516,17 +532,19 @@ mod tests {
         assert_eq!(cmp, resp);
     }
 
-    #[test]
-    fn override_router() {
+    #[tokio::test]
+    async fn override_router() {
         use std::collections::HashMap;
         let registry = registry::Registry::new_from(HashMap::new(), HashMap::new());
         let router = Router::new().registry(&registry).build();
-        let resp = router.exec(Request {
-            jsonrpc: "2.0".to_string(),
-            id: RequestID::Number(42),
-            method: "resources/list".to_string(),
-            params: None,
-        });
+        let resp = router
+            .exec(Request {
+                jsonrpc: "2.0".to_string(),
+                id: RequestID::Number(42),
+                method: "resources/list".to_string(),
+                params: None,
+            })
+            .await;
         let cmp = json!({
             "jsonrpc": "2.0",
             "id": 42,
@@ -535,12 +553,14 @@ mod tests {
             }
         });
         assert_eq!(cmp, resp);
-        let resp2 = router.exec(Request {
-            jsonrpc: "2.0".to_string(),
-            id: RequestID::Number(123),
-            method: "tools/list".to_string(),
-            params: None,
-        });
+        let resp2 = router
+            .exec(Request {
+                jsonrpc: "2.0".to_string(),
+                id: RequestID::Number(123),
+                method: "tools/list".to_string(),
+                params: None,
+            })
+            .await;
         let cmp2 = json!({
             "jsonrpc": "2.0",
             "id": 123,
@@ -553,7 +573,7 @@ mod tests {
 
     #[derive(serde::Deserialize)]
     pub struct ManualResource {
-        dsn: udsn::DSN,
+        _dsn: udsn::DSN,
     }
 
     use crate::registry::{
@@ -561,16 +581,17 @@ mod tests {
     };
     use serde_json::Value;
 
+    #[async_trait]
     impl MCPResourceExecutor for ManualResource {
-        fn execute(&self) -> Vec<MCPResourceResult> {
+        async fn execute(&self) -> Vec<MCPResourceResult> {
             vec![MCPResourceResult::new(
                 "file:///example".to_string(),
                 "example file".to_string(),
             )]
         }
 
-        fn serves(_dsn: &udsn::DSN) -> bool {
-            true
+        fn serves(dsn: &udsn::DSN) -> bool {
+            !dsn.protocol.is_empty()
         }
 
         fn is_template() -> bool {
@@ -582,11 +603,13 @@ mod tests {
         fn get_executor(&self) -> &dyn MCPResourceExecutor {
             self
         }
-        fn meta() -> MCPMeta {
-            MCPMeta::new()
-                .name("meta_example")
-                .uri("manual-resource:///")
-                .build()
+        fn meta() -> Vec<MCPMeta> {
+            vec![
+                MCPMeta::new()
+                    .name("meta_example")
+                    .uri("manual-resource:///")
+                    .build(),
+            ]
         }
         fn params() -> Value {
             Value::Null
@@ -602,18 +625,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn override_router_w_static_resource() {
+    #[tokio::test]
+    async fn override_router_w_static_resource() {
         use std::collections::HashMap;
         let registry = registry::Registry::new_from(HashMap::new(), HashMap::new());
         registry.register_resource_adapter::<ManualResource>("file:///config");
         let router = Router::new().registry(&registry).build();
-        let resp = router.exec(Request {
-            jsonrpc: "2.0".to_string(),
-            id: RequestID::Number(42),
-            method: "resources/list".to_string(),
-            params: None,
-        });
+        let resp = router
+            .exec(Request {
+                jsonrpc: "2.0".to_string(),
+                id: RequestID::Number(42),
+                method: "resources/list".to_string(),
+                params: None,
+            })
+            .await;
         let cmp = json!({
             "jsonrpc": "2.0",
             "id": 42,
@@ -626,12 +651,14 @@ mod tests {
             }
         });
         assert_eq!(cmp, resp);
-        let resp2 = router.exec(Request {
-            jsonrpc: "2.0".to_string(),
-            id: RequestID::Number(123),
-            method: "tools/list".to_string(),
-            params: None,
-        });
+        let resp2 = router
+            .exec(Request {
+                jsonrpc: "2.0".to_string(),
+                id: RequestID::Number(123),
+                method: "tools/list".to_string(),
+                params: None,
+            })
+            .await;
         let cmp2 = json!({
             "jsonrpc": "2.0",
             "id": 123,

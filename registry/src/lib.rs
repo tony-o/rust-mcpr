@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose};
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock, RwLockReadGuard};
@@ -15,8 +16,8 @@ pub enum InfoType {
 }
 
 pub enum FromArgResult {
-    Tool(Box<dyn MCPTool>),
-    Resource(Box<dyn MCPResource>),
+    Tool(Box<dyn MCPTool + Send>),
+    Resource(Box<dyn MCPResource + Send>),
     Error(String),
 }
 
@@ -25,7 +26,7 @@ pub struct Info {
     pub name: &'static str,
     pub info_type: InfoType,
     pub params: fn() -> Value,
-    pub meta: fn() -> MCPMeta,
+    pub meta: fn() -> Vec<MCPMeta>,
     pub from_args: fn(&serde_json::Value) -> FromArgResult,
     pub is_template: fn() -> bool,
     pub serves: fn(&udsn::DSN) -> bool,
@@ -44,9 +45,13 @@ impl Registry {
         let mut resources = HashMap::new();
         for i in inventory::iter::<Info>() {
             if i.info_type == InfoType::Tool {
+                use tracing::info;
+                info!("registering tool: {}", &i.name);
                 tools.insert(i.name.to_string(), i);
             } else {
-                resources.insert((i.meta)().uri.to_string(), i);
+                for meta in (i.meta)() {
+                    resources.insert(meta.uri.to_string(), i);
+                }
             }
         }
         Registry::new_from(tools, resources)
@@ -98,7 +103,7 @@ impl Registry {
 
     pub fn register_resource_adapter<T>(&self, uri: &str)
     where
-        T: MCPResource + MCPResourceExecutor + Send + Sync + 'static,
+        T: MCPResource + crate::MCPResourceExecutor + Send + Sync + 'static,
     {
         let nfo: &'static Info = Box::leak(Box::new(Info {
             name: Box::leak(uri.to_string().into_boxed_str()),
@@ -157,7 +162,7 @@ pub fn registry() -> &'static Registry {
 
 pub trait MCPTool {
     fn get_executor(&self) -> &dyn MCPToolExecutor;
-    fn meta() -> MCPMeta
+    fn meta() -> Vec<MCPMeta>
     where
         Self: Sized;
     fn params() -> Value
@@ -169,7 +174,7 @@ pub trait MCPTool {
 }
 pub trait MCPResource {
     fn get_executor(&self) -> &dyn MCPResourceExecutor;
-    fn meta() -> MCPMeta
+    fn meta() -> Vec<MCPMeta>
     where
         Self: Sized;
     fn params() -> Value
@@ -286,12 +291,14 @@ pub enum MCPExecutionResult {
     ERROR((String, Option<Value>)),
 }
 
-pub trait MCPToolExecutor {
-    fn execute(&self) -> Vec<MCPExecutionResult>;
+#[async_trait]
+pub trait MCPToolExecutor: Send {
+    async fn execute(&self) -> Vec<MCPExecutionResult>;
 }
 
-pub trait MCPResourceExecutor {
-    fn execute(&self) -> Vec<MCPResourceResult>;
+#[async_trait]
+pub trait MCPResourceExecutor: Send {
+    async fn execute(&self) -> Vec<MCPResourceResult>;
     fn serves(dsn: &udsn::DSN) -> bool
     where
         Self: Sized;
@@ -405,13 +412,15 @@ mod tests {
                     is_template: || false,
                     serves: |_| false,
                     params: || serde_json::Value::String("".to_string()),
-                    meta: || MCPMeta {
-                        title: None,
-                        uri: "".to_string(),
-                        name: "".to_string(),
-                        description: None,
-                        mime_type: None,
-                        icons: None,
+                    meta: || {
+                        vec![MCPMeta {
+                            title: None,
+                            uri: "".to_string(),
+                            name: "".to_string(),
+                            description: None,
+                            mime_type: None,
+                            icons: None,
+                        }]
                     },
                 },
             )]),

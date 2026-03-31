@@ -5,8 +5,6 @@ use syn::{
     Data, DeriveInput, Field, Fields, Meta, Token, parse_macro_input, punctuated::Punctuated,
 };
 
-use convert_case::ccase;
-
 fn classify_inner(ty: &syn::Type, is_array: bool, is_optional: bool) -> (&'static str, bool, bool) {
     if let syn::Type::Path(type_path) = ty {
         let last = type_path.path.segments.last().unwrap();
@@ -177,7 +175,7 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
         _ => vec![],
     };
 
-    let snek = ccase!(snake, name_s.as_str());
+    //let snek = ccase!(snake, name_s.as_str());
     let xn = format_ident!("{}", dstruct);
     let ityp = format_ident!("{}", info_type);
     let mtitle = meta.title.clone().unwrap_or(name_s.clone());
@@ -205,9 +203,9 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
         .collect();
 
     let from_args_rval = if info_type == "Tool" {
-        quote! { registry::FromArgResult::Tool(Box::new(a)) }
+        quote! { ::mcpr::registry::FromArgResult::Tool(Box::new(a)) }
     } else {
-        quote! { registry::FromArgResult::Resource(Box::new(a)) }
+        quote! { ::mcpr::registry::FromArgResult::Resource(Box::new(a)) }
     };
 
     let meta_title = if let Some(t) = meta.title.clone() {
@@ -281,10 +279,10 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
     };
 
     let expanded = quote! {
-        impl registry::#xn for #name {
+        impl ::mcpr::registry::#xn for #name {
             fn params() -> Value {
-                json!({
-                    "name": #snek,
+                serde_json::json!({
+                    "name": #meta_name,
                     "title": #mtitle,
                     "description": #mdescription,
                     "inputSchema": {
@@ -295,21 +293,21 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
                 })
             }
 
-            fn meta() -> registry::MCPMeta {
-                registry::MCPMeta {
+            fn meta() -> Vec<::mcpr::registry::MCPMeta> {
+                vec![::mcpr::registry::MCPMeta {
                     title: #meta_title,
                     description: #meta_description,
                     uri: #meta_uri.to_string(),
                     mime_type: #meta_mime_type,
                     icons: #meta_icons,
                     name: #meta_name.to_string(),
-                }
+                }]
             }
 
-            fn from_args(v: &serde_json::Value) -> registry::FromArgResult {
+            fn from_args(v: &serde_json::Value) -> ::mcpr::registry::FromArgResult {
                 match serde_json::from_value::<Self>(v.clone()) {
                     Ok(a) => #from_args_rval,
-                    Err(e) => registry::FromArgResult::Error(format!("{}", e)),
+                    Err(e) => ::mcpr::registry::FromArgResult::Error(format!("{}", e)),
                 }
             }
 
@@ -317,10 +315,10 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
 
         }
 
-        ::registry::_i::submit! {
-            ::registry::Info {
-                name: #snek,
-                info_type: ::registry::InfoType::#ityp,
+        ::mcpr::registry::_i::submit! {
+            ::mcpr::registry::Info {
+                name: #meta_name,
+                info_type: ::mcpr::registry::InfoType::#ityp,
                 params: #name::params,
                 from_args: #name::from_args,
                 meta: #name::meta,
