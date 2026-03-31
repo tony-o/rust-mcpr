@@ -26,7 +26,7 @@ struct ResourceCall {
     uri: String,
 }
 
-pub type ServerIcon = registry::MCPMetaIcon;
+pub type ServerIcon = crate::registry::MCPMetaIcon;
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerInfo {
@@ -72,18 +72,18 @@ impl ServerInfo {
 #[derive(Clone)]
 pub struct Router<'a> {
     server_info: ServerInfo,
-    registry: &'a registry::Registry,
+    registry: &'a crate::registry::Registry,
 }
 
 impl<'a> Router<'a> {
     pub fn new() -> Self {
         Router {
-            registry: registry::registry(),
+            registry: crate::registry::registry(),
             server_info: ServerInfo::new(),
         }
     }
 
-    pub fn registry(&mut self, registry: &'a registry::Registry) -> &mut Self {
+    pub fn registry(&mut self, registry: &'a crate::registry::Registry) -> &mut Self {
         self.registry = registry;
         self
     }
@@ -97,23 +97,23 @@ impl<'a> Router<'a> {
         self.to_owned()
     }
 
-    pub fn registry_ref(&self) -> &registry::Registry {
+    pub fn registry_ref(&self) -> &crate::registry::Registry {
         self.registry
     }
 
     fn execution_result_to_mcp(
-        mcper: Vec<registry::MCPExecutionResult>,
+        mcper: Vec<crate::registry::MCPExecutionResult>,
         content_key: &str,
     ) -> serde_json::Value {
         let mut content: Vec<serde_json::Value> = Vec::new();
         let mut result = serde_json::Map::new();
         for mcpr in &mcper {
             match mcpr {
-                registry::MCPExecutionResult::TEXT(s) => content.push(serde_json::json!({
+                crate::registry::MCPExecutionResult::TEXT(s) => content.push(serde_json::json!({
                     "type": "text",
                     "text": s.to_string(),
                 })),
-                registry::MCPExecutionResult::AUDIO(a) => {
+                crate::registry::MCPExecutionResult::AUDIO(a) => {
                     let mut v = serde_json::Map::new();
                     v.insert(
                         "type".to_string(),
@@ -134,13 +134,13 @@ impl<'a> Router<'a> {
                     }
                     content.push(serde_json::Value::Object(v));
                 }
-                registry::MCPExecutionResult::IMAGE(a) => content.push(serde_json::json!({
+                crate::registry::MCPExecutionResult::IMAGE(a) => content.push(serde_json::json!({
                     "type": "image",
                     "data": general_purpose::STANDARD.encode(&a.data),
                     "mimeType": a.mime_type,
                 })),
-                registry::MCPExecutionResult::RAW(v) => content.push(v.clone()),
-                registry::MCPExecutionResult::RESOURCE(r) => {
+                crate::registry::MCPExecutionResult::RAW(v) => content.push(v.clone()),
+                crate::registry::MCPExecutionResult::RESOURCE(r) => {
                     content.push(
                         serde_json::to_value(r)
                             .unwrap_or_else(|e|
@@ -148,7 +148,7 @@ impl<'a> Router<'a> {
                                                    "text": format!("error: {:?} serializing result: {}", r, e)
                                 })));
                 }
-                registry::MCPExecutionResult::ERROR((s, _)) => {
+                crate::registry::MCPExecutionResult::ERROR((s, _)) => {
                     content
                         .push(serde_json::json!({"type":"text", "text": format!("error: {}", s)}));
                     if content_key == "content" {
@@ -224,17 +224,17 @@ impl<'a> Router<'a> {
                     match (tool.from_args)(
                         &tool_call.arguments.clone().unwrap_or(serde_json::json!({})),
                     ) {
-                        registry::FromArgResult::Tool(caller) => {
+                        crate::registry::FromArgResult::Tool(caller) => {
                             let executor = caller.get_executor();
                             return Router::execution_result_to_mcp(
                                 executor.execute().await,
                                 "content",
                             );
                         }
-                        registry::FromArgResult::Error(s) => {
+                        crate::registry::FromArgResult::Error(s) => {
                             return serde_json::json!({"error": {"code": -32602, "message": format!("invalid parameters for tools/call {}", s)}});
                         }
-                        registry::FromArgResult::Resource(_) => {
+                        crate::registry::FromArgResult::Resource(_) => {
                             return serde_json::json!({"error": {"code": -32600, "message": "server is misconfigured, a resource was registered as a tool"}});
                         }
                     }
@@ -244,7 +244,7 @@ impl<'a> Router<'a> {
             return serde_json::json!({"error": { "code": -32602, "message": "malformed request from LLM"}});
         } else if req.method == "resources/list" {
             // TODO: paging
-            let mut resources: Vec<registry::MCPMeta> = Vec::new();
+            let mut resources: Vec<crate::registry::MCPMeta> = Vec::new();
             for rsrc in self.registry.resources().values() {
                 if !(rsrc.is_template)() {
                     resources.extend((rsrc.meta)());
@@ -252,11 +252,11 @@ impl<'a> Router<'a> {
             }
             return serde_json::json!({"result": {"resources": resources }});
         } else if req.method == "resources/templates/list" {
-            let mut resources: Vec<registry::MCPTemplateMeta> = Vec::new();
+            let mut resources: Vec<crate::registry::MCPTemplateMeta> = Vec::new();
             for rsrc in self.registry.resources().values() {
                 if (rsrc.is_template)() {
                     for meta in (rsrc.meta)() {
-                        resources.push(registry::MCPTemplateMeta::from_meta(&meta));
+                        resources.push(crate::registry::MCPTemplateMeta::from_meta(&meta));
                     }
                 }
             }
@@ -267,7 +267,7 @@ impl<'a> Router<'a> {
             ) {
                 if let Some(r) = self.registry.get_resource(&resource_call.uri) {
                     // exact match
-                    if let registry::FromArgResult::Resource(a) =
+                    if let crate::registry::FromArgResult::Resource(a) =
                         (r.from_args)(&serde_json::json!({ "dsn": &resource_call.uri }))
                     {
                         return Router::execution_result_to_mcp(
@@ -275,7 +275,7 @@ impl<'a> Router<'a> {
                                 .execute()
                                 .await
                                 .iter()
-                                .map(|a| registry::MCPExecutionResult::RESOURCE(a.clone()))
+                                .map(|a| crate::registry::MCPExecutionResult::RESOURCE(a.clone()))
                                 .collect(),
                             "contents",
                         );
@@ -289,12 +289,12 @@ impl<'a> Router<'a> {
                             return serde_json::json!({"error": { "code": -32602, "message": "malformed request, expected uri in params"}});
                         }
                     };
-                    let ris: Vec<&'static registry::Info> =
+                    let ris: Vec<&'static crate::registry::Info> =
                         self.registry.resources().values().copied().collect();
                     for i in ris {
                         if (i.is_template)()
                             && (i.serves)(&dsn)
-                            && let registry::FromArgResult::Resource(a) =
+                            && let crate::registry::FromArgResult::Resource(a) =
                                 (i.from_args)(&serde_json::json!({ "dsn": &resource_call.uri }))
                         {
                             return Router::execution_result_to_mcp(
@@ -302,7 +302,9 @@ impl<'a> Router<'a> {
                                     .execute()
                                     .await
                                     .iter()
-                                    .map(|a| registry::MCPExecutionResult::RESOURCE(a.clone()))
+                                    .map(|a| {
+                                        crate::registry::MCPExecutionResult::RESOURCE(a.clone())
+                                    })
                                     .collect(),
                                 "contents",
                             );
@@ -535,7 +537,7 @@ mod tests {
     #[tokio::test]
     async fn override_router() {
         use std::collections::HashMap;
-        let registry = registry::Registry::new_from(HashMap::new(), HashMap::new());
+        let registry = crate::registry::Registry::new_from(HashMap::new(), HashMap::new());
         let router = Router::new().registry(&registry).build();
         let resp = router
             .exec(Request {
@@ -628,7 +630,7 @@ mod tests {
     #[tokio::test]
     async fn override_router_w_static_resource() {
         use std::collections::HashMap;
-        let registry = registry::Registry::new_from(HashMap::new(), HashMap::new());
+        let registry = crate::registry::Registry::new_from(HashMap::new(), HashMap::new());
         registry.register_resource_adapter::<ManualResource>("file:///config");
         let router = Router::new().registry(&registry).build();
         let resp = router

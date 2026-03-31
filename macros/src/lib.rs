@@ -72,7 +72,24 @@ fn type_to_json(name: &str, f: &Field) -> proc_macro2::TokenStream {
     }
 }
 
-fn parse_register_meta(ast: &DeriveInput) -> Result<registry::MCPMeta, String> {
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+struct MetaIconish {
+    pub src: String,
+    pub mime_type: String,
+    pub sizes: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+struct Metaish {
+    pub title: Option<String>,
+    pub uri: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+    pub icons: Option<Vec<MetaIconish>>,
+}
+
+fn parse_register_meta(ast: &DeriveInput) -> Result<Metaish, String> {
     let mut title = None;
     let mut description = None;
     let mut icons = None;
@@ -102,7 +119,7 @@ fn parse_register_meta(ast: &DeriveInput) -> Result<registry::MCPMeta, String> {
                 } else if nv.path.is_ident("description") {
                     description = Some(s.value());
                 } else if nv.path.is_ident("icons") {
-                    match serde_json::from_str::<Vec<registry::MCPMetaIcon>>(&s.value()) {
+                    match serde_json::from_str::<Vec<MetaIconish>>(&s.value()) {
                         Ok(a) => icons = Some(a),
                         Err(e) => {
                             return Err(format!(
@@ -122,7 +139,7 @@ fn parse_register_meta(ast: &DeriveInput) -> Result<registry::MCPMeta, String> {
         }
     }
 
-    Ok(registry::MCPMeta {
+    Ok(Metaish {
         title,
         name,
         description,

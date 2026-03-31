@@ -1,7 +1,13 @@
 [package]
-name = "registry"
+name = "mcp-router-registry"
 version = "0.1.0"
 edition = "2024"
+description = "Registry mechanism `mcp-router`, makes the router code simple."
+authors = ["tony-o"]
+readme = "README.md"
+repository = "https://github.com/tony-o/rust-mcpr"
+license = "Artistic-2.0"
+keywords = ["mcp", "ai", "macros", "http"]
 
 [dependencies]
 async-trait = "0.1.89"

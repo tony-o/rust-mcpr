@@ -2,15 +2,22 @@
 name = "mcp-router-macros"
 version = "0.1.0"
 edition = "2024"
+description = "Macros for `mcp-router`, provides default implementations and gets you going quickly."
+authors = ["tony-o"]
+readme = "README.md"
+repository = "https://github.com/tony-o/rust-mcpr"
+license = "Artistic-2.0"
+keywords = ["mcp", "ai", "macros", "http"]
 
 [lib]
 proc-macro = true
 
 [dependencies]
 syn = {version="2", features=["full"]}
+serde = "1.0.0"
 quote = "1"
 proc-macro2 = "1"
 inventory = "0.3"
-registry = { path = "../registry", version = "0.1.0" }
+mcp-router-registry = { path = "../registry", version = "0.1.0" }
 serde_json = "1.0.0"
 tracing = "0.1.44"

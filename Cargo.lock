@@ -45,30 +45,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
-name = "macros"
-version = "0.1.0"
-dependencies = [
- "inventory",
- "proc-macro2",
- "quote",
- "registry",
- "serde_json",
- "syn",
- "tracing",
-]
-
-[[package]]
 name = "mcp-router"
 version = "0.1.0"
 dependencies = [
  "assert-json-diff",
  "async-trait",
  "base64",
- "macros",
- "registry",
+ "mcp-router-macros",
+ "mcp-router-registry",
  "serde",
  "serde_json",
  "tokio",
+ "udsn",
+]
+
+[[package]]
+name = "mcp-router-macros"
+version = "0.1.0"
+dependencies = [
+ "inventory",
+ "mcp-router-registry",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "syn",
+ "tracing",
+]
+
+[[package]]
+name = "mcp-router-registry"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "inventory",
+ "serde",
+ "serde_json",
+ "tracing",
  "udsn",
 ]
 
@@ -106,19 +120,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
 dependencies = [
  "proc-macro2",
-]
-
-[[package]]
-name = "registry"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "base64",
- "inventory",
- "serde",
- "serde_json",
- "tracing",
- "udsn",
 ]
 
 [[package]]
