@@ -141,12 +141,19 @@ impl<'a> Router<'a> {
                 })),
                 crate::registry::MCPExecutionResult::RAW(v) => content.push(v.clone()),
                 crate::registry::MCPExecutionResult::RESOURCE(r) => {
-                    content.push(
-                        serde_json::to_value(r)
-                            .unwrap_or_else(|e|
-                                serde_json::json!({"type": "text",
-                                                   "text": format!("error: {:?} serializing result: {}", r, e)
-                                })));
+                    let mut val = serde_json::to_value(r).unwrap_or_else(|e| {
+                        serde_json::json!({
+                            "type": "text",
+                            "text": format!("error: {:?} serializing result: {}", r, e)
+                        })
+                    });
+                    if let serde_json::Value::Object(ref mut o) = val {
+                        o.insert(
+                            "type".to_string(),
+                            serde_json::Value::String("resource_link".to_string()),
+                        );
+                    }
+                    content.push(val);
                 }
                 crate::registry::MCPExecutionResult::ERROR((s, _)) => {
                     content
@@ -523,10 +530,12 @@ mod tests {
             "result": {
                 "contents": [
                     {"uri": "test://forward",
-                     "name": "git://some-repo"
+                     "name": "git://some-repo",
+                     "type": "resource_link"
                     },
                     {"uri": "test://reverse",
-                     "name": "oper-emos//:tig"
+                     "name": "oper-emos//:tig",
+                     "type": "resource_link"
                     }
                 ],
             }

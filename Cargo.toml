@@ -1,6 +1,6 @@
 [package]
 name = "mcp-router"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "An MCP Router for the masses. Inspired by the myriad of difficult to use, limited use cased libraries currently available"
 authors = ["tony-o"]
