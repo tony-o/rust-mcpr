@@ -203,9 +203,9 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
         .collect();
 
     let from_args_rval = if info_type == "Tool" {
-        quote! { ::mcpr::registry::FromArgResult::Tool(Box::new(a)) }
+        quote! { ::mcp_router::registry::FromArgResult::Tool(Box::new(a)) }
     } else {
-        quote! { ::mcpr::registry::FromArgResult::Resource(Box::new(a)) }
+        quote! { ::mcp_router::registry::FromArgResult::Resource(Box::new(a)) }
     };
 
     let meta_title = if let Some(t) = meta.title.clone() {
@@ -279,7 +279,7 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
     };
 
     let expanded = quote! {
-        impl ::mcpr::registry::#xn for #name {
+        impl ::mcp_router::registry::#xn for #name {
             fn params() -> Value {
                 serde_json::json!({
                     "name": #meta_name,
@@ -293,8 +293,8 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
                 })
             }
 
-            fn meta() -> Vec<::mcpr::registry::MCPMeta> {
-                vec![::mcpr::registry::MCPMeta {
+            fn meta() -> Vec<::mcp_router::registry::MCPMeta> {
+                vec![::mcp_router::registry::MCPMeta {
                     title: #meta_title,
                     description: #meta_description,
                     uri: #meta_uri.to_string(),
@@ -304,10 +304,10 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
                 }]
             }
 
-            fn from_args(v: &serde_json::Value) -> ::mcpr::registry::FromArgResult {
+            fn from_args(v: &serde_json::Value) -> ::mcp_router::registry::FromArgResult {
                 match serde_json::from_value::<Self>(v.clone()) {
                     Ok(a) => #from_args_rval,
-                    Err(e) => ::mcpr::registry::FromArgResult::Error(format!("{}", e)),
+                    Err(e) => ::mcp_router::registry::FromArgResult::Error(format!("{}", e)),
                 }
             }
 
@@ -315,10 +315,10 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
 
         }
 
-        ::mcpr::registry::_i::submit! {
-            ::mcpr::registry::Info {
+        ::mcp_router::registry::_i::submit! {
+            ::mcp_router::registry::Info {
                 name: #meta_name,
-                info_type: ::mcpr::registry::InfoType::#ityp,
+                info_type: ::mcp_router::registry::InfoType::#ityp,
                 params: #name::params,
                 from_args: #name::from_args,
                 meta: #name::meta,

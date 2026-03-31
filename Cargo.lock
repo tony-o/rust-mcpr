@@ -58,7 +58,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mcpr"
+name = "mcp-router"
 version = "0.1.0"
 dependencies = [
  "assert-json-diff",

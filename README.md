@@ -1,4 +1,4 @@
-# mcpr - an MCP router and serializer
+# mcp-router - an MCP router and serializer
 
 this library is for people who don't want to be experts in MCP dances, and inspired by the lack of cohesion/poor documentation in current MCP libraries.
 
@@ -41,14 +41,14 @@ impl MCPToolExecutor for FingerSaw {
 #[post("/mcp", format = "json", data = "<body>")]
 pub async fn mcp(body: Json<Value>) -> Json<Value> {
     /* you might put this default router into a fairing or whatever your HTTP framework's analog */
-    Json(mcpr::router::Router::new().exec_from_value(body.into_inner()))
+    Json(mcp_router::router::Router::new().exec_from_value(body.into_inner()))
 }
 ```
 
 ### ez mode resources
 
 ```rust
-use mcpr::registry::{
+use mcp_router::registry::{
     MCPResource, MCPResourceExecutor, MCPResourceResult,
 };
 use serde::{Deserialize, Serialize};
@@ -92,7 +92,7 @@ impl MCPResourceExecutor for HandSaw {
 #[post("/mcp", format = "json", data = "<body>")]
 pub async fn mcp(body: Json<Value>) -> Json<Value> {
     /* you might put this default router into a fairing or whatever your HTTP framework's analog */
-    Json(mcpr::router::Router::new().exec_from_value(body.into_inner()))
+    Json(mcp_router::router::Router::new().exec_from_value(body.into_inner()))
 }
 ```
 
@@ -111,7 +111,7 @@ are:
 example resource:
 
 ```rust
-use mcpr::registry::{
+use mcp_router::registry::{
     FromArgResult, MCPMeta, MCPResource, MCPResourceExecutor, MCPResourceResult,
 };
 use serde_json::Value;

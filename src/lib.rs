@@ -1,4 +1,4 @@
-extern crate self as mcpr;
+extern crate self as mcp_router;
 pub use macros::{MCPResource, MCPTool};
 pub use registry;
 pub mod router;
