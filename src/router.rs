@@ -216,7 +216,7 @@ impl<'a> Router<'a> {
             }
             return serde_json::json!({
                 "result": {
-                    "protocolVersion": "2025-11-25",
+                    "protocolVersion": req.params.clone().unwrap_or(serde_json::json!({})).get("protocolVersion").unwrap_or(&serde_json::Value::String("2025-11-25".to_string())),
                     "capabilities": capabilities,
                     "serverInfo": self.server_info
                 }
@@ -361,6 +361,36 @@ mod tests {
         assert_eq!(cmp, resp);
     }
 
+    #[tokio::test]
+    async fn initialize_w_protocolv() {
+        let resp = Router::new()
+            .exec(Request {
+                jsonrpc: "2.0".to_string(),
+                id: RequestID::Number(123),
+                method: "initialize".to_string(),
+                params: Some(serde_json::json!({
+                    "protocolVersion": "abc"
+                })),
+            })
+            .await;
+        let cmp = json!({
+            "jsonrpc": "2.0",
+            "id": 123,
+            "result": {
+                "capabilities": {
+                    "tools": {},
+                    "resources": {},
+                },
+                "protocolVersion": "abc",
+                "serverInfo": {
+                    "name": "Example MCP Server",
+                    "version": "1.0.0",
+                }
+            }
+        }
+        );
+        assert_eq!(cmp, resp);
+    }
     #[tokio::test]
     async fn initialize_w_server_info() {
         let resp = Router::new()
