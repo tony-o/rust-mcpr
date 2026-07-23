@@ -10,7 +10,7 @@ enum RequestID {
 #[derive(serde::Deserialize, serde::Serialize)]
 pub struct Request {
     jsonrpc: String,
-    id: RequestID,
+    id: Option<RequestID>,
     method: String,
     params: Option<serde_json::Value>,
 }
@@ -186,13 +186,15 @@ impl<'a> Router<'a> {
                     "jsonrpc".to_string(),
                     serde_json::Value::String(req.jsonrpc),
                 );
-                result_map.insert(
-                    "id".to_string(),
-                    match req.id {
-                        RequestID::Number(a) => serde_json::Value::Number(a.into()),
-                        RequestID::Str(a) => serde_json::Value::String(a),
-                    },
-                );
+                match req.id {
+                    Some(RequestID::Number(a)) => {
+                        result_map.insert("id".to_string(), serde_json::Value::Number(a.into()));
+                    }
+                    Some(RequestID::Str(a)) => {
+                        result_map.insert("id".to_string(), serde_json::Value::String(a));
+                    }
+                    None => (),
+                };
                 serde_json::Value::Object(result_map)
             }
             a => a,
@@ -221,6 +223,8 @@ impl<'a> Router<'a> {
                     "serverInfo": self.server_info
                 }
             });
+        } else if req.method == "notifications/initialized" {
+            return serde_json::Value::Null;
         } else if req.method == "tools/list" {
             return serde_json::json!({"result": { "tools": self.registry.tools().values().map(|i| (i.params)()).collect::<Vec<_>>() } });
         } else if req.method == "tools/call" {
@@ -337,7 +341,7 @@ mod tests {
         let resp = Router::new()
             .exec(Request {
                 jsonrpc: "2.0".to_string(),
-                id: RequestID::Number(123),
+                id: Some(RequestID::Number(123)),
                 method: "initialize".to_string(),
                 params: None,
             })
@@ -366,7 +370,7 @@ mod tests {
         let resp = Router::new()
             .exec(Request {
                 jsonrpc: "2.0".to_string(),
-                id: RequestID::Number(123),
+                id: Some(RequestID::Number(123)),
                 method: "initialize".to_string(),
                 params: Some(serde_json::json!({
                     "protocolVersion": "abc"
@@ -402,7 +406,7 @@ mod tests {
             )
             .exec(Request {
                 jsonrpc: "2.0".to_string(),
-                id: RequestID::Number(123),
+                id: Some(RequestID::Number(123)),
                 method: "initialize".to_string(),
                 params: None,
             })
@@ -432,7 +436,7 @@ mod tests {
         let resp = Router::new()
             .exec(Request {
                 jsonrpc: "2.0".to_string(),
-                id: RequestID::Number(123),
+                id: Some(RequestID::Number(123)),
                 method: "tools/list".to_string(),
                 params: json!({
                     "test": 15,
@@ -470,7 +474,7 @@ mod tests {
         let resp = Router::new()
             .exec(Request {
                 jsonrpc: "2.0".to_string(),
-                id: RequestID::Number(42),
+                id: Some(RequestID::Number(42)),
                 method: "tools/call".to_string(),
                 params: json!({
                     "name": "ABCCamel",
@@ -497,7 +501,7 @@ mod tests {
         let resp = Router::new()
             .exec(Request {
                 jsonrpc: "2.0".to_string(),
-                id: RequestID::Str("a666".to_string()),
+                id: Some(RequestID::Str("a666".to_string())),
                 method: "tools/call".to_string(),
                 params: json!({
                     "name": "ABCCamel",
@@ -524,7 +528,7 @@ mod tests {
         let resp = Router::new()
             .exec(Request {
                 jsonrpc: "2.0".to_string(),
-                id: RequestID::Number(42),
+                id: Some(RequestID::Number(42)),
                 method: "resources/list".to_string(),
                 params: None,
             })
@@ -549,7 +553,7 @@ mod tests {
         let resp = Router::new()
             .exec(Request {
                 jsonrpc: "2.0".to_string(),
-                id: RequestID::Str("123".to_string()),
+                id: Some(RequestID::Str("123".to_string())),
                 method: "resources/read".to_string(),
                 params: Some(json!({ "uri": "git://some-repo" })),
             })
@@ -581,7 +585,7 @@ mod tests {
         let resp = router
             .exec(Request {
                 jsonrpc: "2.0".to_string(),
-                id: RequestID::Number(42),
+                id: Some(RequestID::Number(42)),
                 method: "resources/list".to_string(),
                 params: None,
             })
@@ -597,7 +601,7 @@ mod tests {
         let resp2 = router
             .exec(Request {
                 jsonrpc: "2.0".to_string(),
-                id: RequestID::Number(123),
+                id: Some(RequestID::Number(123)),
                 method: "tools/list".to_string(),
                 params: None,
             })
@@ -675,7 +679,7 @@ mod tests {
         let resp = router
             .exec(Request {
                 jsonrpc: "2.0".to_string(),
-                id: RequestID::Number(42),
+                id: Some(RequestID::Number(42)),
                 method: "resources/list".to_string(),
                 params: None,
             })
@@ -695,7 +699,7 @@ mod tests {
         let resp2 = router
             .exec(Request {
                 jsonrpc: "2.0".to_string(),
-                id: RequestID::Number(123),
+                id: Some(RequestID::Number(123)),
                 method: "tools/list".to_string(),
                 params: None,
             })
