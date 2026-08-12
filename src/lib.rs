@@ -1,17 +1,17 @@
 extern crate self as mcp_router;
 
 pub use mcp_router_macros::{MCPResource, MCPTool};
-pub use mcp_router_registry as registry;
+pub mod registry;
 pub mod router;
 
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
-    use mcp_router_macros::{MCPResource, MCPTool};
-    use mcp_router_registry::{
+    use crate::registry::{
         MCPExecutionResult, MCPResource, MCPResourceExecutor, MCPResourceResult, MCPTool,
         MCPToolExecutor,
     };
+    use async_trait::async_trait;
+    use mcp_router_macros::{MCPResource, MCPTool};
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
 

@@ -1,2 +1,2 @@
 **/target
-*.sw(o|p)
+*.sw[o|p]

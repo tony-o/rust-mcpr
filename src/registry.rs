@@ -103,7 +103,7 @@ impl Registry {
 
     pub fn register_resource_adapter<T>(&self, uri: &str)
     where
-        T: MCPResource + crate::MCPResourceExecutor + Send + Sync + 'static,
+        T: MCPResource + MCPResourceExecutor + Send + Sync + 'static,
     {
         let nfo: &'static Info = Box::leak(Box::new(Info {
             name: Box::leak(uri.to_string().into_boxed_str()),
@@ -433,13 +433,15 @@ mod tests {
                     params: || serde_json::Value::String("".to_string()),
                     is_template: || false,
                     serves: |_| false,
-                    meta: || MCPMeta {
-                        title: None,
-                        uri: "".to_string(),
-                        name: "".to_string(),
-                        description: None,
-                        mime_type: None,
-                        icons: None,
+                    meta: || {
+                        vec![MCPMeta {
+                            title: None,
+                            uri: "".to_string(),
+                            name: "".to_string(),
+                            description: None,
+                            mime_type: None,
+                            icons: None,
+                        }]
                     },
                 },
             )]),

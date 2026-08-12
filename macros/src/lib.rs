@@ -1,5 +1,6 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
+use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use syn::{
     Data, DeriveInput, Field, Fields, Meta, Token, parse_macro_input, punctuated::Punctuated,
@@ -72,14 +73,14 @@ fn type_to_json(name: &str, f: &Field) -> proc_macro2::TokenStream {
     }
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct MetaIconish {
     pub src: String,
     pub mime_type: String,
     pub sizes: Vec<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct Metaish {
     pub title: Option<String>,
     pub uri: String,

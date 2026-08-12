@@ -51,11 +51,12 @@ dependencies = [
  "assert-json-diff",
  "async-trait",
  "base64",
+ "inventory",
  "mcp-router-macros",
- "mcp-router-registry",
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
  "udsn",
 ]
 
@@ -64,26 +65,12 @@ name = "mcp-router-macros"
 version = "0.1.0"
 dependencies = [
  "inventory",
- "mcp-router-registry",
  "proc-macro2",
  "quote",
  "serde",
  "serde_json",
  "syn",
  "tracing",
-]
-
-[[package]]
-name = "mcp-router-registry"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "base64",
- "inventory",
- "serde",
- "serde_json",
- "tracing",
- "udsn",
 ]
 
 [[package]]

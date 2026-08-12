@@ -14,10 +14,10 @@ proc-macro = true
 
 [dependencies]
 syn = {version="2", features=["full"]}
-serde = "1.0.0"
+serde = {version="1.0.0", features=["derive"]}
 quote = "1"
 proc-macro2 = "1"
 inventory = "0.3"
-mcp-router-registry = { path = "../registry", version = "0.1.0" }
+#mcp-router-registry = { path = "../registry", version = "0.1.0" }
 serde_json = "1.0.0"
 tracing = "0.1.44"
