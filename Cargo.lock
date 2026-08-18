@@ -1722,6 +1722,8 @@ dependencies = [
 [[package]]
 name = "mcp-router-macros"
 version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dfac941750453657d86d6d86c1ab934a41baf8b63e1694bbb257a9bdd9c89130"
 dependencies = [
  "inventory",
  "proc-macro2",
