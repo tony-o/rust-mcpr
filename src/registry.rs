@@ -13,11 +13,13 @@ pub use inventory as _i;
 pub enum InfoType {
     Tool,
     Resource,
+    Prompt,
 }
 
 pub enum FromArgResult {
     Tool(Box<dyn MCPTool + Send>),
     Resource(Box<dyn MCPResource + Send>),
+    Prompt(Box<dyn MCPPrompt + Send>),
     Error(String),
 }
 
@@ -30,6 +32,7 @@ pub struct Info {
     pub from_args: fn(&serde_json::Value) -> FromArgResult,
     pub is_template: fn() -> bool,
     pub serves: fn(&udsn::DSN) -> bool,
+    pub complete: fn(&str, &str) -> Option<Vec<String>>,
 }
 
 inventory::collect!(Info);
@@ -37,24 +40,38 @@ inventory::collect!(Info);
 pub struct Registry {
     tools: RwLock<HashMap<String, &'static Info>>,
     resources: RwLock<HashMap<String, &'static Info>>,
+    prompts: RwLock<HashMap<String, &'static Info>>,
 }
 
 impl Registry {
     fn new() -> Self {
         let mut tools = HashMap::new();
         let mut resources = HashMap::new();
+        let mut prompts = HashMap::new();
         for i in inventory::iter::<Info>() {
-            if i.info_type == InfoType::Tool {
-                use tracing::info;
-                info!("registering tool: {}", &i.name);
-                tools.insert(i.name.to_string(), i);
-            } else {
-                for meta in (i.meta)() {
-                    resources.insert(meta.uri.to_string(), i);
+            match i.info_type {
+                InfoType::Tool => {
+                    use tracing::info;
+                    info!("registering tool: {}", &i.name);
+                    tools.insert(i.name.to_string(), i);
+                }
+                InfoType::Prompt => {
+                    use tracing::info;
+                    info!("registering prompt: {}", &i.name);
+                    prompts.insert(i.name.to_string(), i);
+                }
+                InfoType::Resource => {
+                    for meta in (i.meta)() {
+                        resources.insert(meta.uri.to_string(), i);
+                    }
                 }
             }
         }
-        Registry::new_from(tools, resources)
+        Self {
+            tools: RwLock::new(tools),
+            resources: RwLock::new(resources),
+            prompts: RwLock::new(prompts),
+        }
     }
 
     pub fn new_from(
@@ -64,6 +81,19 @@ impl Registry {
         Self {
             tools: RwLock::new(tools),
             resources: RwLock::new(resources),
+            prompts: RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub fn new_from_all(
+        tools: HashMap<String, &'static Info>,
+        resources: HashMap<String, &'static Info>,
+        prompts: HashMap<String, &'static Info>,
+    ) -> Self {
+        Self {
+            tools: RwLock::new(tools),
+            resources: RwLock::new(resources),
+            prompts: RwLock::new(prompts),
         }
     }
 
@@ -78,6 +108,13 @@ impl Registry {
         match self.resources.read() {
             Ok(t) => t.get(uri).copied(),
             Err(e) => Some(e.into_inner().get(uri)?),
+        }
+    }
+
+    pub fn get_prompt(&self, name: &str) -> Option<&'static Info> {
+        match self.prompts.read() {
+            Ok(t) => t.get(name).copied(),
+            Err(e) => Some(e.into_inner().get(name)?),
         }
     }
 
@@ -101,6 +138,16 @@ impl Registry {
         }
     }
 
+    pub fn prompts(&self) -> RwLockReadGuard<'_, HashMap<String, &'static Info>> {
+        match self.prompts.read() {
+            Ok(t) => t,
+            Err(e) => {
+                error!("Error reading from prompts lock: {}", e);
+                panic!("Error reading from prompts lock: {}", e);
+            }
+        }
+    }
+
     pub fn register_resource_adapter<T>(&self, uri: &str)
     where
         T: MCPResource + MCPResourceExecutor + Send + Sync + 'static,
@@ -113,6 +160,7 @@ impl Registry {
             meta: T::meta,
             is_template: T::is_template,
             serves: T::serves,
+            complete: T::complete,
         }));
         let mut resources = match self.resources.write() {
             Ok(t) => t,
@@ -139,6 +187,7 @@ impl Registry {
             meta: T::meta,
             is_template: || false,
             serves: |_| false,
+            complete: |_, _| None,
         }));
         let mut tools = match self.tools.write() {
             Ok(t) => t,
@@ -151,6 +200,33 @@ impl Registry {
             warn!("Overwriting tool handler {}", name);
         }
         tools.insert(name.to_string(), nfo);
+    }
+
+    pub fn register_prompt_adapter<T>(&self, name: &str)
+    where
+        T: MCPPrompt + MCPPromptExecutor + Send + Sync + 'static,
+    {
+        let nfo: &'static Info = Box::leak(Box::new(Info {
+            name: Box::leak(name.to_string().into_boxed_str()),
+            info_type: InfoType::Prompt,
+            params: T::params,
+            from_args: T::from_args,
+            meta: T::meta,
+            is_template: || false,
+            serves: |_| false,
+            complete: T::complete,
+        }));
+        let mut prompts = match self.prompts.write() {
+            Ok(t) => t,
+            Err(e) => {
+                error!("Failed to lock prompts for writing: {}", e);
+                return;
+            }
+        };
+        if prompts.get(name).is_some() {
+            warn!("Overwriting prompt handler {}", name);
+        }
+        prompts.insert(name.to_string(), nfo);
     }
 }
 
@@ -183,6 +259,54 @@ pub trait MCPResource {
     fn from_args(v: &serde_json::Value) -> FromArgResult
     where
         Self: Sized;
+    fn complete(_argument_name: &str, _partial_value: &str) -> Option<Vec<String>>
+    where
+        Self: Sized,
+    {
+        None
+    }
+}
+pub trait MCPPrompt {
+    fn get_executor(&self) -> &dyn MCPPromptExecutor;
+    fn meta() -> Vec<MCPMeta>
+    where
+        Self: Sized;
+    fn params() -> Value
+    where
+        Self: Sized;
+    fn from_args(v: &serde_json::Value) -> FromArgResult
+    where
+        Self: Sized;
+    fn complete(_argument_name: &str, _partial_value: &str) -> Option<Vec<String>>
+    where
+        Self: Sized,
+    {
+        None
+    }
+}
+
+#[derive(Debug)]
+pub struct MCPPromptMessage {
+    pub role: String,
+    pub content: MCPExecutionResult,
+}
+
+#[derive(Debug)]
+pub struct MCPPromptResult {
+    pub description: Option<String>,
+    pub messages: Vec<MCPPromptMessage>,
+}
+
+#[async_trait]
+pub trait MCPPromptExecutor: Send {
+    async fn execute(&self) -> MCPPromptResult;
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MCPExecutionResultAnnotations {
+    pub audience: Vec<String>,
+    pub priority: f32,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -190,13 +314,33 @@ pub trait MCPResource {
 pub struct MCPExecutionResultImage {
     pub mime_type: String,
     pub data: Vec<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<MCPExecutionResultAnnotations>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MCPExecutionResultAudioAnnotations {
-    pub audience: Vec<String>,
-    pub priority: f32,
+pub struct MCPExecutionResultText {
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<MCPExecutionResultAnnotations>,
+}
+
+impl From<String> for MCPExecutionResultText {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            annotations: None,
+        }
+    }
+}
+
+impl From<&str> for MCPExecutionResultText {
+    fn from(text: &str) -> Self {
+        Self {
+            text: text.to_string(),
+            annotations: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -205,7 +349,7 @@ pub struct MCPExecutionResultAudio {
     pub mime_type: String,
     pub data: Vec<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub annotations: Option<MCPExecutionResultAudioAnnotations>,
+    pub annotations: Option<MCPExecutionResultAnnotations>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -218,7 +362,7 @@ pub struct MCPResourceIcons {
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MCPResourceResult {
+pub struct MCPResourceResultLink {
     pub uri: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -229,29 +373,71 @@ pub struct MCPResourceResult {
     pub icons: Option<Vec<MCPResourceIcons>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MCPResourceResultText {
+    pub uri: String,
+    pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub size: Option<u64>,
+    pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub blob: Option<String>,
+    pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
+    pub icons: Option<Vec<MCPResourceIcons>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MCPResourceResultBlob {
+    pub uri: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icons: Option<Vec<MCPResourceIcons>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    pub blob: String,
+}
+
+#[derive(Debug)]
+pub enum MCPResourceResult {
+    LINK(MCPResourceResultLink),
+    TEXT(MCPResourceResultText),
+    BLOB(MCPResourceResultBlob),
+    STREAM(MCPExecutionResultStream),
+}
+
+pub struct MCPResourceResultBuilder {
+    uri: String,
+    name: String,
+    title: Option<String>,
+    description: Option<String>,
+    icons: Option<Vec<MCPResourceIcons>>,
+    mime_type: Option<String>,
 }
 
 impl MCPResourceResult {
-    pub fn new(uri: String, name: String) -> Self {
-        Self {
+    pub fn new(uri: String, name: String) -> MCPResourceResultBuilder {
+        MCPResourceResultBuilder {
             uri,
             name,
             title: None,
             description: None,
             icons: None,
             mime_type: None,
-            size: None,
-            blob: None,
-            text: None,
         }
     }
+}
 
+impl MCPResourceResultBuilder {
     pub fn title(&mut self, title: &str) -> &mut Self {
         self.title = Some(title.to_string());
         self
@@ -264,41 +450,66 @@ impl MCPResourceResult {
         self.mime_type = Some(mime_type.to_string());
         self
     }
-    pub fn size(&mut self, size: u64) -> &mut Self {
-        self.size = Some(size);
-        self
+    pub fn build(&mut self) -> MCPResourceResult {
+        MCPResourceResult::LINK(MCPResourceResultLink {
+            uri: self.uri.clone(),
+            name: self.name.clone(),
+            title: self.title.clone(),
+            description: self.description.clone(),
+            icons: self.icons.clone(),
+            mime_type: self.mime_type.clone(),
+        })
     }
-    pub fn blob(&mut self, data: Vec<u8>) -> &mut Self {
-        let blob = general_purpose::STANDARD.encode(&data).to_string();
-        self.blob = Some(blob);
-        self
+    pub fn text(&mut self, text: &str) -> MCPResourceResult {
+        MCPResourceResult::TEXT(MCPResourceResultText {
+            uri: self.uri.clone(),
+            name: self.name.clone(),
+            title: self.title.clone(),
+            description: self.description.clone(),
+            icons: self.icons.clone(),
+            mime_type: self.mime_type.clone(),
+            text: text.to_string(),
+        })
     }
-    pub fn text(&mut self, text: &str) -> &mut Self {
-        self.text = Some(text.to_string());
-        self
-    }
-    pub fn build(&mut self) -> Self {
-        self.to_owned()
+    pub fn blob(&mut self, data: Vec<u8>) -> MCPResourceResult {
+        let blob = general_purpose::STANDARD.encode(&data);
+        MCPResourceResult::BLOB(MCPResourceResultBlob {
+            uri: self.uri.clone(),
+            name: self.name.clone(),
+            title: self.title.clone(),
+            description: self.description.clone(),
+            icons: self.icons.clone(),
+            mime_type: self.mime_type.clone(),
+            blob,
+        })
     }
 }
 
+#[derive(Debug)]
+pub struct MCPExecutionResultStream {
+    pub receiver: futures_channel::mpsc::Receiver<serde_json::Value>,
+    pub sender: futures_channel::mpsc::Sender<serde_json::Value>,
+}
+
+#[derive(Debug)]
 pub enum MCPExecutionResult {
-    TEXT(String),
+    TEXT(MCPExecutionResultText),
     IMAGE(MCPExecutionResultImage),
     AUDIO(MCPExecutionResultAudio),
     RESOURCE(MCPResourceResult),
     RAW(serde_json::Value),
     ERROR((String, Option<Value>)),
+    STREAM(MCPExecutionResultStream),
 }
 
 #[async_trait]
 pub trait MCPToolExecutor: Send {
-    async fn execute(&self) -> Vec<MCPExecutionResult>;
+    async fn execute(&self, cursor: Option<String>) -> (Vec<MCPExecutionResult>, Option<String>);
 }
 
 #[async_trait]
 pub trait MCPResourceExecutor: Send {
-    async fn execute(&self) -> Vec<MCPResourceResult>;
+    async fn execute(&self, cursor: Option<String>) -> (Vec<MCPResourceResult>, Option<String>);
     fn serves(dsn: &udsn::DSN) -> bool
     where
         Self: Sized;
@@ -368,7 +579,7 @@ impl MCPMeta {
     }
 }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MCPTemplateMeta {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -411,6 +622,7 @@ mod tests {
                     from_args: |_| FromArgResult::Error("tool".to_string()),
                     is_template: || false,
                     serves: |_| false,
+                    complete: |_, _| None,
                     params: || serde_json::Value::String("".to_string()),
                     meta: || {
                         vec![MCPMeta {
@@ -433,6 +645,7 @@ mod tests {
                     params: || serde_json::Value::String("".to_string()),
                     is_template: || false,
                     serves: |_| false,
+                    complete: |_, _| None,
                     meta: || {
                         vec![MCPMeta {
                             title: None,

@@ -150,6 +150,29 @@ fn parse_register_meta(ast: &DeriveInput) -> Result<Metaish, String> {
     })
 }
 
+fn parse_arg_description(f: &Field) -> Option<String> {
+    for attr in &f.attrs {
+        if !attr.path().is_ident("arg") {
+            continue;
+        }
+        let nested = attr
+            .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+            .unwrap_or_default();
+        for meta in nested {
+            if let Meta::NameValue(nv) = meta
+                && nv.path.is_ident("description")
+                && let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(s),
+                    ..
+                }) = &nv.value
+            {
+                return Some(s.value());
+            }
+        }
+    }
+    None
+}
+
 fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     let meta = match parse_register_meta(&ast) {
@@ -215,15 +238,43 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
         })
         .collect();
 
-    let prop_toks: Vec<proc_macro2::TokenStream> = params
+    let mut prop_toks: Vec<proc_macro2::TokenStream> = params
         .iter()
         .map(|(nm, f)| type_to_json(nm.as_str(), f))
         .collect();
+    if info_type == "Tool" {
+        prop_toks.push(quote! { "cursor": { "type": "string" } });
+    }
 
     let from_args_rval = if info_type == "Tool" {
         quote! { ::mcp_router::registry::FromArgResult::Tool(Box::new(a)) }
+    } else if info_type == "Prompt" {
+        quote! { ::mcp_router::registry::FromArgResult::Prompt(Box::new(a)) }
     } else {
         quote! { ::mcp_router::registry::FromArgResult::Resource(Box::new(a)) }
+    };
+
+    let prompt_arg_toks: Vec<proc_macro2::TokenStream> = params
+        .iter()
+        .map(|(nm, fld)| {
+            let is_required = required.contains(nm);
+            match parse_arg_description(fld) {
+                Some(d) => quote! { {"name": #nm, "description": #d, "required": #is_required} },
+                None => quote! { {"name": #nm, "required": #is_required} },
+            }
+        })
+        .collect();
+
+    let params_shape = if info_type == "Prompt" {
+        quote! { "arguments": [#(#prompt_arg_toks),*] }
+    } else {
+        quote! {
+            "inputSchema": {
+                "type": "object",
+                "properties": {#(#prop_toks),*},
+                "required": [#(#required),*]
+            }
+        }
     };
 
     let meta_title = if let Some(t) = meta.title.clone() {
@@ -279,12 +330,14 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
         "MCP{}Executor",
         if info_type == "Tool" {
             "Tool"
+        } else if info_type == "Prompt" {
+            "Prompt"
         } else {
             "Resource"
         }
     );
 
-    let resource_extras = if info_type == "Tool" {
+    let resource_extras = if info_type == "Tool" || info_type == "Prompt" {
         quote! {
             is_template: || false,
             serves: |_| false,
@@ -296,6 +349,12 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
         }
     };
 
+    let complete_extra = if info_type == "Tool" {
+        quote! { complete: |_, _| None, }
+    } else {
+        quote! { complete: #name::complete, }
+    };
+
     let expanded = quote! {
         impl ::mcp_router::registry::#xn for #name {
             fn params() -> Value {
@@ -303,11 +362,7 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
                     "name": #meta_name,
                     "title": #mtitle,
                     "description": #mdescription,
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {#(#prop_toks),*},
-                        "required": [#(#required),*]
-                    },
+                    #params_shape,
                 })
             }
 
@@ -341,6 +396,7 @@ fn generic_derive(dstruct: String, info_type: String, input: TokenStream) -> Tok
                 from_args: #name::from_args,
                 meta: #name::meta,
                 #resource_extras
+                #complete_extra
             }
         }
     };
@@ -356,4 +412,9 @@ pub fn derive_mcp_tool(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(MCPResource, attributes(meta))]
 pub fn derive_mcp_resource(input: TokenStream) -> TokenStream {
     generic_derive("MCPResource".to_string(), "Resource".to_string(), input)
+}
+
+#[proc_macro_derive(MCPPrompt, attributes(meta, arg))]
+pub fn derive_mcp_prompt(input: TokenStream) -> TokenStream {
+    generic_derive("MCPPrompt".to_string(), "Prompt".to_string(), input)
 }
