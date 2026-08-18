@@ -66,6 +66,10 @@ enum RequestID {
     Absent,
 }
 
+/// A parsed JSON-RPC request, as accepted by [`Router::exec`]. You won't normally build one of
+/// these by hand — [`Router::exec_from_value`] is the entry point almost everyone wants, since it
+/// also handles batches and malformed input; `exec` exists for when you've already deserialized
+/// (and validated) a single request yourself.
 #[derive(serde::Deserialize, serde::Serialize)]
 pub struct Request {
     jsonrpc: String,
@@ -87,6 +91,9 @@ struct ResourceCall {
 }
 
 pub type ServerIcon = crate::registry::MCPMetaIcon;
+
+/// What your server calls itself in the `initialize` handshake — set it via
+/// [`Router::server_info`], or leave the (frankly not very inspired) default.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerInfo {
@@ -103,6 +110,8 @@ pub struct ServerInfo {
 }
 
 impl ServerInfo {
+    /// Starts a new builder with placeholder name/version. Chain `.name()`/`.description()`,
+    /// then finish with [`ServerInfo::build`].
     pub fn new() -> Self {
         Self {
             name: "Example MCP Server".to_string(),
@@ -137,6 +146,15 @@ fn request_id_to_json(id: &RequestID) -> serde_json::Value {
     }
 }
 
+/// The inbound half of a [`RouterStream`] — how you feed a reply to one of the tool's own
+/// server-initiated requests (e.g. `sampling/createMessage`) back to it.
+///
+/// For a single streaming tool this wraps just that one tool's channel. For a batch request where
+/// more than one item streams at once, it wraps *all* of their channels: [`RouterStreamSender::send`]
+/// broadcasts the same value to every one of them, synchronously and without spawning any
+/// background task. Each tool is already filtering its own inbound channel for the correlation id
+/// it invented, so a reply meant for a different tool in the same batch is simply ignored rather
+/// than delivered incorrectly.
 #[derive(Debug)]
 pub struct RouterStreamSender {
     senders: Vec<futures_channel::mpsc::Sender<serde_json::Value>>,
@@ -147,6 +165,8 @@ impl RouterStreamSender {
         Self { senders }
     }
 
+    /// Delivers `value` to every tool currently listening on this stream. A tool that already
+    /// finished (and dropped its receiver) simply doesn't get it — that's expected, not an error.
     pub async fn send(&mut self, value: serde_json::Value) {
         use futures_util::SinkExt;
         for sender in &mut self.senders {
@@ -155,6 +175,15 @@ impl RouterStreamSender {
     }
 }
 
+/// What [`RouterResponse::Stream`] carries: a `receiver` of already-transformed JSON-RPC messages
+/// ready to forward over whatever transport you're using, and a `sender` to feed replies back in.
+///
+/// Every item off `receiver` is already a complete, ready-to-send JSON value: anything with a
+/// `"method"` field is a notification or a server-initiated request awaiting a reply (relay it
+/// verbatim); anything without one is a final answer, already wrapped as
+/// `{"jsonrpc":"2.0","id":...,"result":...}`, and the stream ends right after it. If a tool's own
+/// channel closes without ever producing a final answer, the last item you'll see is a
+/// synthesized `-32603` error rather than the stream just silently going quiet.
 pub struct RouterStream {
     pub receiver: std::pin::Pin<Box<dyn futures_util::stream::Stream<Item = serde_json::Value> + Send>>,
     pub sender: RouterStreamSender,
@@ -166,6 +195,11 @@ impl std::fmt::Debug for RouterStream {
     }
 }
 
+/// What [`Router::exec`]/[`Router::exec_from_value`] hand back. `Value` is the ordinary case —
+/// exactly what these methods always returned before streaming existed. `Stream` shows up when a
+/// tool/resource returned `MCPExecutionResult::STREAM`/`MCPResourceResult::STREAM` (or, for a
+/// batch request, when at least one item did — see [`RouterStream`]'s docs for what a batch's
+/// combined stream looks like).
 #[derive(Debug)]
 pub enum RouterResponse {
     Value(serde_json::Value),
@@ -284,6 +318,12 @@ fn resource_result_to_contents_value(r: &crate::registry::MCPResourceResult) -> 
     }
 }
 
+/// The single entry point for dispatching MCP requests. Transport-agnostic — it takes/returns
+/// plain [`serde_json::Value`]/[`RouterResponse`], so it's equally at home behind an HTTP handler,
+/// a stdio loop, or anything else. See [`Router::exec_from_value`] to actually run a request.
+///
+/// Cheap to `Clone` (it's a couple of small fields plus a registry reference), which matters for
+/// sharing one instance across request handlers in most web frameworks.
 #[derive(Clone)]
 pub struct Router<'a> {
     server_info: ServerInfo,
@@ -292,6 +332,10 @@ pub struct Router<'a> {
 }
 
 impl<'a> Router<'a> {
+    /// Starts a builder using the global, `inventory`-populated registry
+    /// ([`crate::registry::registry`]) — what `#[derive(MCPTool)]`/`#[derive(MCPResource)]`/
+    /// `#[derive(MCPPrompt)]` auto-register into. Chain `.registry()` to use your own instead,
+    /// `.page_size()`/`.server_info()` as needed, then finish with [`Router::build`].
     pub fn new() -> Self {
         Router {
             registry: crate::registry::registry(),
@@ -300,16 +344,22 @@ impl<'a> Router<'a> {
         }
     }
 
+    /// How many items `tools/list`/`resources/list`/`resources/templates/list`/`prompts/list`
+    /// return per page (default 50). Clamped to at least 1.
     pub fn page_size(&mut self, n: usize) -> &mut Self {
         self.page_size = n.max(1);
         self
     }
 
+    /// Uses your own [`crate::registry::Registry`] instead of the global one — see the crate's
+    /// `README.md` for when manual registration is worth the extra setup (multiple independent
+    /// registries in one process, resources generated at runtime, etc.).
     pub fn registry(&mut self, registry: &'a crate::registry::Registry) -> &mut Self {
         self.registry = registry;
         self
     }
 
+    /// Sets what this server calls itself in the `initialize` handshake.
     pub fn server_info(&mut self, server_info: ServerInfo) -> &mut Self {
         self.server_info = server_info;
         self
@@ -319,6 +369,7 @@ impl<'a> Router<'a> {
         self.to_owned()
     }
 
+    /// The registry this router is currently configured to dispatch against.
     pub fn registry_ref(&self) -> &crate::registry::Registry {
         self.registry
     }
@@ -479,6 +530,17 @@ impl<'a> Router<'a> {
         serde_json::json!({"result": result})
     }
 
+    /// Dispatches a raw JSON-RPC value — a single request/notification, or a batch (JSON array)
+    /// of them — and returns the [`RouterResponse`] to send back. This is the entry point almost
+    /// every embedder should use.
+    ///
+    /// Handles JSON-RPC semantics for you: a notification (no `id`) yields
+    /// `RouterResponse::Value(Value::Null)`, which callers should treat as "nothing to send" (a
+    /// 202 with an empty body over HTTP, or simply not printing a line over stdio); malformed
+    /// input becomes a `-32700` Parse error; an empty batch array becomes a `-32600` Invalid
+    /// request; and a batch where at least one item streams gets elevated to a single merged
+    /// `RouterResponse::Stream` covering the whole batch — see [`RouterStream`]'s docs for exactly
+    /// how that merge behaves.
     pub async fn exec_from_value(&self, v: serde_json::Value) -> RouterResponse {
         if let serde_json::Value::Array(items) = &v {
             if items.is_empty() {
@@ -533,6 +595,9 @@ impl<'a> Router<'a> {
         }
     }
 
+    /// Dispatches a single already-parsed [`Request`]. Prefer [`Router::exec_from_value`] unless
+    /// you specifically need to skip its batch handling and raw-`Value` parsing (e.g. you've
+    /// already validated and deserialized the request yourself).
     pub async fn exec(&self, req: Request) -> RouterResponse {
         match self.execx(&req).await {
             RouterResponse::Value(serde_json::Value::Object(mut result_map)) => {

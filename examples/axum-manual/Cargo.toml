@@ -1,0 +1,15 @@
+[package]
+name = "axum-manual"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+async-trait = "0.1.89"
+axum = "0.8.9"
+mcp-router = { path = "../.." }
+mcp-examples-shared-db = { path = "../shared-db" }
+serde = { version = "1.0.0", features = ["derive"] }
+serde_json = "1.0.0"
+tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros", "net"] }
+udsn = { version = "0.2.1", features = ["json"] }

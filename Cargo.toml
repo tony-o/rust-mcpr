@@ -8,6 +8,7 @@ readme = "README.md"
 repository = "https://github.com/tony-o/rust-mcpr"
 license = "Artistic-2.0"
 keywords = ["mcp", "ai", "macros", "http"]
+categories = ["artificial-intelligence", "asynchronous", "network-programming", "api-bindings"]
 exclude = ["examples/"]
 
 [dependencies]

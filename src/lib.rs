@@ -1,7 +1,19 @@
+#![doc = include_str!("lib.md")]
+
 extern crate self as mcp_router;
 
+/// Build a channel pair for a streaming tool/resource's own [`registry::MCPExecutionResultStream`]
+/// — a re-export of [`futures_channel::mpsc::channel`]. Works under any async executor; the
+/// receiver/sender types don't tie you to any particular runtime.
 pub use futures_channel::mpsc::{channel as stream_channel, Receiver as StreamReceiver, Sender as StreamSender};
+/// Re-exports of the `futures_util` extension traits needed to use [`StreamReceiver`]/
+/// [`StreamSender`] and [`router::RouterStreamSender`] — `.next().await` and `.send(value).await`
+/// — so consumers don't need `futures-util` as their own direct dependency.
 pub use futures_util::{SinkExt, StreamExt};
+/// Derive macros for [`registry::MCPPrompt`], [`registry::MCPResource`], and [`registry::MCPTool`].
+/// These generate the trait impl (including a JSON schema from your struct's fields) and
+/// auto-register the type into the global [`registry::Registry`] via `inventory` — see each
+/// trait's own docs for the manual-registration alternative.
 pub use mcp_router_macros::{MCPPrompt, MCPResource, MCPTool};
 pub mod registry;
 pub mod router;
